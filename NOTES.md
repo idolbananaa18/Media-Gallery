@@ -41,3 +41,8 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 4. Video duration/resolution tags via ffprobe when available.
 ## Last session
 Fixed: wall now uses native aspect ratio at a uniform height (340px) instead of native pixel size (`dsz()` in layout/fit). Earlier: replaced grid with the floating wall (scatter layout, culling, mouse pan with easing, idle drift, CSS sway), added hide mode (H), removed favorites/sorting/shape/fit. Server: dimensions from webp/bmp/mp4/mov headers, favorites removed. Fixed a view/layout race found in testing and idle drift not starting. Verified with jsdom (no overlaps in 176 items, culling, pan mapping, play cap, hide, filters, zoom, lightbox, tags) and header-parse checks. No real browser or IDM available.
+
+## Performance (measured, headless Chromium; relative numbers)
+- Biggest costs on a heavy library, in order: decoding full-size photos for tiny tiles, per-tile sway animation + big soft shadow, playing videos.
+- Wall tiles use cached thumbnails (`/t/<path>`, max 1280px, stored in `.thumbs/`, keyed by path+mtime+size) when Pillow is installed and the photo is bigger than 1280px; the lightbox always loads the original (`/f/...`). No Pillow = originals, nothing breaks. `--no-thumbs` disables. gif/avif/video are never thumbnailed. `.thumbs/` is never pruned automatically (safe to delete).
+- Sway "Off" now removes the animation (`body.nosway`) instead of running it at zero amplitude. Settings has a Shadows checkbox (`body.noshadow`).

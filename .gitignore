@@ -2,3 +2,4 @@ media/
 gallery_data.json
 __pycache__/
 *.pyc
+.thumbs/

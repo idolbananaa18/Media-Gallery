@@ -5,6 +5,10 @@ import argparse, hashlib, json, os, sys, re, struct, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote, quote
+try:  # optional: with Pillow installed, big photos get cached ~1280px thumbnails for the wall (much smoother). Without it, nothing changes.
+    from PIL import Image, ImageOps
+except Exception:
+    Image = ImageOps = None
 
 HERE = Path(__file__).resolve().parent
 KIND = {".gif": "gif"}
@@ -16,6 +20,11 @@ STOP = set("img image vid video gif the and with copy final new untitled downloa
 LOCK = threading.Lock()
 ROOT = HERE / "media"
 DATA_FILE = HERE / "gallery_data.json"
+THUMB_DIR = HERE / ".thumbs"
+THUMB_MAX = 1280                      # longest side of a wall thumbnail, px
+THUMB_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}   # gif stays animated/original; avif needs a Pillow plugin
+THUMB_GATE = threading.Semaphore(2)   # decode at most 2 big photos at once so the machine stays responsive
+USE_THUMBS = Image is not None
 INDEX, CACHE, VID = {}, {}, {}
 CHUNK = 2_000_000  # max bytes per range response: frees sockets so many videos can stream at once
 CODECS = {b"avc1": "H.264", b"hvc1": "H.265/HEVC", b"hev1": "H.265/HEVC", b"av01": "AV1", b"vp09": "VP9",
@@ -106,6 +115,31 @@ def dims(p):
     return None
 
 
+def thumb_path(p, st):
+    """Path of the cached thumbnail for p, creating it if needed; None means 'use the original'."""
+    if not USE_THUMBS: return None
+    out = THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()[:24] + ".jpg")
+    if out.is_file(): return out
+    png = out.with_suffix(".png")
+    if png.is_file(): return png
+    with THUMB_GATE:
+        if out.is_file(): return out
+        if png.is_file(): return png
+        try:
+            THUMB_DIR.mkdir(exist_ok=True)
+            with Image.open(p) as im:
+                if im.format == "JPEG": im.draft("RGB", (THUMB_MAX, THUMB_MAX))  # decode at reduced size: much faster
+                im = ImageOps.exif_transpose(im)
+                im.thumbnail((THUMB_MAX, THUMB_MAX), Image.LANCZOS)
+                alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+                dest, tmp = (png, png.with_suffix(".tmp")) if alpha else (out, out.with_suffix(".tmp"))
+                (im.convert("RGBA") if alpha else im.convert("RGB")).save(tmp, "PNG" if alpha else "JPEG", **({} if alpha else {"quality": 85}))
+            os.replace(tmp, dest)
+            return dest
+        except Exception:
+            return None
+
+
 def norm(t):
     return re.sub(r"[^a-z0-9 \-]", "", str(t).lower()).strip()[:40]
 
@@ -160,7 +194,8 @@ def scan():
             url = "/f/" + quote(rel)
             if k == "video":  # extension-less URL + neutral type so download managers don't treat it as a video
                 h = hashlib.sha1(rel.encode()).hexdigest()[:16]; vids[h] = rel; url = "/v/" + h
-            it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "w": wh[0] if wh else 0,
+            th = "/t/" + quote(rel) if USE_THUMBS and k == "image" and ext in THUMB_EXT and wh and max(wh) > THUMB_MAX else None
+            it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "th": th, "w": wh[0] if wh else 0,
                   "h": wh[1] if wh else 0, "mtime": int(st.st_mtime), "size": st.st_size,
                   "auto": auto_tags(rel, k, wh, st.st_mtime)}
             items.append(it)
@@ -221,6 +256,12 @@ class H(BaseHTTPRequestHandler):
             with LOCK: rel = VID.get(path[3:])
             return self.file(safe(rel) if rel else None, True)
         if path.startswith("/f/"): return self.file(safe(unquote(path[3:])))
+        if path.startswith("/t/"):
+            p = safe(unquote(path[3:]))
+            if not p: return self.file(None)
+            try: t = thumb_path(p, p.stat())
+            except OSError: t = None
+            return self.file(t or p)
         self.send(404, b"not found")
 
     def do_POST(self):
@@ -282,7 +323,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 #world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;transition:opacity .25s}#world.out{opacity:0}
 .m{position:absolute;left:0;top:0}.m:hover{z-index:3}
 .f{position:relative;cursor:pointer;animation:sw var(--du) ease-in-out var(--de) infinite alternate}
-.f:hover{animation-play-state:paused}
+.f:hover{animation-play-state:paused}.nosway .f{animation:none}.noshadow .g>img,.noshadow .g>video{box-shadow:none}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
 .g{pointer-events:none;position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease,translate .6s cubic-bezier(.22,.8,.25,1)}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
 .g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}
@@ -326,6 +367,7 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <label>Accent <input id="s_ac" type="color"></label>
 <label>Blur until hover <input id="s_blur" type="checkbox"></label>
 <label>Show names <input id="s_labels" type="checkbox"></label>
+<label title="Soft shadow under each tile. Turning it off makes big walls noticeably smoother">Shadows <input id="s_shadows" type="checkbox"></label>
 <label title="On hover, the tile slides toward the centre of your screen. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
 <label title="Which videos play (when limited by the playing cap): those nearest the centre of the screen (0%) or nearest your mouse (100%)">Video focus <input id="s_vf" type="range" min="0" max="100" step="10"></label>
 <label>Video previews <select id="s_prev"><option value="all">Play in view</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
@@ -335,19 +377,19 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,hover:1.02,pull:0,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,hover:1.02,pull:0,shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
 function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);r.style.setProperty('--hs',S.hover);
- document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+ document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -382,7 +424,7 @@ function layout(){const z=S.zoom,vw=innerWidth,vh=innerHeight,GAP=44;
  world.style.width=W+'px';world.style.height=H+'px'}
 function mk(i){const it=view[i],p=pos[i],h=h32(it.id),m=document.createElement('div');m.className='m';m.dataset.i=i;m.style.transform=`translate3d(${p.x}px,${p.y}px,0)`;
  m.innerHTML=`<div class="f" style="width:${p.w}px;height:${p.h}px;--dx:${h%17-8}px;--dy:${(h>>>5)%17-8}px;--rt:${((h>>>9)%9-4)/10}deg;--du:${9+(h>>>13)%9}s;--de:-${(h>>>3)%10}s"><div class="g">`
- +(it.kind=='video'?`<video src="${it.url}" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
+ +(it.kind=='video'?`<video src="${it.url}" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.th||it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
  world.appendChild(m);return m}
 let hov=null;const ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0;
 /* Hover pull: the target is captured ONCE when the pointer enters a tile (where the screen centre is at that moment) and then stays fixed,
@@ -461,7 +503,10 @@ def main():
     global ROOT
     ap = argparse.ArgumentParser()
     ap.add_argument("--media", default=str(HERE / "media")); ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--no-thumbs", action="store_true", help="don't generate wall thumbnails (default: on when Pillow is installed)")
     a = ap.parse_args()
+    global USE_THUMBS
+    if a.no_thumbs: USE_THUMBS = False
     ROOT = Path(a.media).expanduser().resolve(); ROOT.mkdir(parents=True, exist_ok=True)
     srv = Srv(("127.0.0.1", a.port), H)
     print(f"Gallery: http://127.0.0.1:{a.port}  (media: {ROOT})")
