@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local media gallery. Run: python3 gallery.py [--media DIR] [--port N]
 Serves on 127.0.0.1 only. Stdlib only; UI is embedded below."""
-import argparse, json, os, sys, re, struct, threading, time
+import argparse, hashlib, json, os, sys, re, struct, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote, quote
@@ -16,7 +16,8 @@ STOP = set("img image vid video gif the and with copy final new untitled downloa
 LOCK = threading.Lock()
 ROOT = HERE / "media"
 DATA_FILE = HERE / "gallery_data.json"
-INDEX, CACHE = {}, {}
+INDEX, CACHE, VID = {}, {}, {}
+CHUNK = 2_000_000  # max bytes per range response: frees sockets so many videos can stream at once
 CODECS = {b"avc1": "H.264", b"hvc1": "H.265/HEVC", b"hev1": "H.265/HEVC", b"av01": "AV1", b"vp09": "VP9",
           b"vp08": "VP8", b"mp4v": "MPEG-4 Part 2", b"apch": "ProRes", b"apcn": "ProRes"}
 
@@ -108,7 +109,7 @@ def effective(it, d):
 
 
 def scan():
-    d, items = load_data(), []
+    d, items, vids = load_data(), [], {}
     for dp, dn, fn in os.walk(ROOT):
         dn[:] = sorted(x for x in dn if not x.startswith("."))
         for n in sorted(fn):
@@ -123,12 +124,15 @@ def scan():
                 k = KIND[ext]
                 CACHE[key] = (k, dims(p) if k != "video" else None)
             k, wh = CACHE[key]
-            it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": "/f/" + quote(rel), "w": wh[0] if wh else 0,
+            url = "/f/" + quote(rel)
+            if k == "video":  # extension-less URL + neutral type so download managers don't treat it as a video
+                h = hashlib.sha1(rel.encode()).hexdigest()[:16]; vids[h] = rel; url = "/v/" + h
+            it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "w": wh[0] if wh else 0,
                   "h": wh[1] if wh else 0, "mtime": int(st.st_mtime), "size": st.st_size,
                   "auto": auto_tags(rel, k, wh, st.st_mtime)}
             items.append(it)
     with LOCK:
-        INDEX.clear(); INDEX.update({i["id"]: i for i in items})
+        INDEX.clear(); INDEX.update({i["id"]: i for i in items}); VID.clear(); VID.update(vids)
     for i in items:
         i["tags"] = effective(i, d); i["fav"] = i["id"] in d["fav"]
     return items
@@ -183,7 +187,10 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/codec":
             p = safe(parse_qs(urlparse(self.path).query).get("id", [""])[0])
             return self.send(200, json.dumps({"codec": codec(p) if p else None}).encode(), "application/json")
-        if path.startswith("/f/"): return self.file(unquote(path[3:]))
+        if path.startswith("/v/"):
+            with LOCK: rel = VID.get(path[3:])
+            return self.file(safe(rel) if rel else None, True)
+        if path.startswith("/f/"): return self.file(safe(unquote(path[3:])))
         self.send(404, b"not found")
 
     def do_POST(self):
@@ -201,8 +208,7 @@ class H(BaseHTTPRequestHandler):
         if out is None: return self.send(404, b"unknown item")
         self.send(200, json.dumps(out).encode(), "application/json")
 
-    def file(self, rel):
-        p = safe(rel)
+    def file(self, p, neutral=False):
         if not p: return self.send(404, b"not found")
         size = p.stat().st_size
         start, end, code = 0, size - 1, 200
@@ -214,12 +220,12 @@ class H(BaseHTTPRequestHandler):
                 start = max(0, size - int(m[2]))
             if start > end or start >= size:
                 return self.send(416, b"", extra=[("Content-Range", f"bytes */{size}")])
-            code = 206
-        ctype = MIME.get(p.suffix.lower(), "application/octet-stream")
+            code = 206; end = min(end, start + CHUNK - 1)
+        hdr = [("Content-Type", "application/octet-stream" if neutral else MIME.get(p.suffix.lower(), "application/octet-stream")),
+               ("Accept-Ranges", "bytes"), ("Content-Length", str(max(0, end - start + 1))), ("Cache-Control", "private, max-age=300")]
+        if not neutral: hdr += [("Content-Disposition", "inline"), ("X-Content-Type-Options", "nosniff")]
         self.send_response(code)
-        for k, v in (("Content-Type", ctype), ("Accept-Ranges", "bytes"), ("Content-Length", str(max(0, end - start + 1))),
-                     ("Cache-Control", "private, max-age=300"), ("Content-Disposition", "inline"), ("X-Content-Type-Options", "nosniff")):
-            self.send_header(k, v)
+        for k, v in hdr: self.send_header(k, v)
         if code == 206: self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
         if self.command == "HEAD" or not size: return
@@ -235,104 +241,129 @@ class H(BaseHTTPRequestHandler):
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gallery</title><style>
-:root{--bg:#121214;--fg:#e8e6ea;--mut:#8b8892;--line:#2a2a2f;--tile:#1c1c20;--ac:#c9a7ff;--s:220px;--ar:1/1;--fit:cover}
-[data-theme=light]{--bg:#f5f4f2;--fg:#1d1c20;--mut:#76737c;--line:#dedbd6;--tile:#e8e5e0}
-[data-theme=black]{--bg:#000;--tile:#111;--line:#222}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
-button,input,select{font:inherit;color:inherit;background:var(--tile);border:1px solid var(--line);border-radius:8px;padding:6px 11px}
-button{cursor:pointer}button:hover{border-color:var(--mut)}button.on{background:var(--ac);border-color:var(--ac);color:#111}
+:root{--bg:#0e0e11;--fg:#ececf1;--mut:#8d8b96;--line:#25252b;--tile:#17171c;--ac:#c9a7ff;--fit:cover;--r:14px;--g:10px}
+[data-theme=light]{--bg:#f6f5f3;--fg:#1d1c20;--mut:#77747d;--line:#e0ddd8;--tile:#eae7e2}
+[data-theme=black]{--bg:#000;--tile:#101013;--line:#1e1e22}
+*{box-sizing:border-box}html{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+button,input,select{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:99px;padding:7px 14px;transition:background .2s,border-color .2s,color .2s}
+select{padding-right:8px}button{cursor:pointer}button:hover,select:hover{border-color:var(--mut)}
+button.on{background:var(--ac);border-color:var(--ac);color:#141416}
 :focus-visible{outline:2px solid var(--ac);outline-offset:2px}
-header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 16px 8px;border-bottom:1px solid var(--line)}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row+.row{margin-top:8px}
-#q{flex:1;min-width:160px}.tags{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:thin;padding-bottom:4px}
-.tags button{white-space:nowrap;border-radius:99px;padding:3px 10px;color:var(--mut)}.tags button.on{color:#111}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--s),1fr));gap:6px;padding:12px 16px}
-.t{position:relative;aspect-ratio:var(--ar);background:var(--tile);border-radius:6px;overflow:hidden;cursor:pointer}
-.t img,.t video{width:100%;height:100%;object-fit:var(--fit);display:block}
-.t b{position:absolute;left:6px;bottom:6px;font-weight:500;font-size:11px;background:#000a;color:#fff;border-radius:4px;padding:1px 6px}
-.t i{position:absolute;right:6px;top:4px;color:var(--ac);font-style:normal}
-.blur .t img,.blur .t video{filter:blur(22px)}.blur .t:hover img,.blur .t:hover video{filter:none}
-#empty{padding:60px 16px;text-align:center;color:var(--mut)}
-#lb{position:fixed;inset:0;z-index:10;background:#000e;display:none;grid-template-rows:1fr auto;color:#eee}
-#lb.open{display:grid}#stage{min-height:0;display:flex;align-items:center;justify-content:center;padding:12px}
-#stage img,#stage video{max-width:100%;max-height:100%;border-radius:4px}
-#bar{padding:10px 16px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#111;border-top:1px solid #333}
-#bar button,#bar input{background:#1c1c20;border-color:#333;color:#eee}#bar .nm{color:#999;margin-right:auto;max-width:40ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chip{border-radius:99px!important;padding:2px 10px!important}
-#set{position:fixed;right:16px;top:60px;z-index:8;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px;display:none;gap:10px;flex-direction:column;width:250px}
-#set.open{display:flex}#set label{display:flex;justify-content:space-between;align-items:center;gap:10px}
-@media(max-width:600px){:root{--s:130px}#grid{padding:8px;gap:4px}}
-@media(prefers-reduced-motion:no-preference){#lb.open{animation:f .12s}}@keyframes f{from{opacity:0}}
+header{position:sticky;top:0;z-index:5;padding:14px 20px 8px;background:color-mix(in srgb,var(--bg) 80%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row+.row{margin-top:10px}
+#q{flex:1;min-width:150px;background:var(--tile);border-color:transparent}#q:focus{border-color:var(--ac);outline:0}
+#cnt{color:var(--mut);margin:0 4px}
+.tags{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;mask-image:linear-gradient(90deg,#000 94%,transparent)}
+.tags button{white-space:nowrap;padding:3px 12px;color:var(--mut);border-color:transparent;background:var(--tile)}.tags button.on{color:#141416;background:var(--ac)}
+#grid{display:flex;gap:var(--g);padding:8px 20px 20px;align-items:flex-start}
+.c{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--g)}
+.t{position:relative;aspect-ratio:var(--ar);background:var(--tile);border-radius:var(--r);overflow:hidden;cursor:pointer;isolation:isolate}
+.t img,.t video{display:block;width:100%;height:100%;object-fit:var(--fit);opacity:0;transition:opacity .6s ease,transform .6s ease;transform:scale(1.015)}
+.t .ld{opacity:1;transform:none}
+.t span{position:absolute;inset:auto 0 0;padding:26px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000a);opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t:hover span,.t:focus-visible span{opacity:1}
+.t b{position:absolute;right:8px;top:8px;font-weight:500;font-size:11px;background:#0008;color:#fff;border-radius:99px;padding:1px 8px;backdrop-filter:blur(6px)}
+.t i{position:absolute;left:9px;top:5px;color:var(--ac);font-style:normal;font-size:15px}
+.bad::before{content:"Can't play";position:absolute;inset:0;display:grid;place-items:center;color:var(--mut);font-size:12px}
+.blur .t img,.blur .t video{filter:blur(24px)}.blur .t:hover img,.blur .t:hover video{filter:none}
+#empty{padding:80px 20px;text-align:center;color:var(--mut)}#end{height:1px}
+#lb{position:fixed;inset:0;z-index:10;background:#000f;display:grid;grid-template-rows:1fr auto;color:#eee;visibility:hidden;opacity:0;transition:opacity .22s,visibility 0s .22s}
+#lb.open{visibility:visible;opacity:1;transition:opacity .22s}
+#stage{min-height:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;padding:14px}
+#stage img,#stage video{max-width:100%;max-height:100%;border-radius:10px;animation:in .3s}@keyframes in{from{opacity:0;transform:scale(.985)}}
+#bar{padding:10px 20px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#bar button,#bar input{border-color:#34343a;color:#eee}#bar button:hover{border-color:#888}#bar button.on{color:#141416}
+#bar .nm{color:#9a98a2;margin-right:auto;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chip{padding:2px 11px!important}
+#set{position:fixed;right:20px;top:64px;z-index:8;background:var(--bg);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;gap:12px;flex-direction:column;width:270px;box-shadow:0 16px 48px #0006;opacity:0;pointer-events:none;transform:translateY(-6px);transition:opacity .18s,transform .18s}
+#set.open{opacity:1;pointer-events:auto;transform:none}#set label{display:flex;justify-content:space-between;align-items:center;gap:10px;color:var(--mut)}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media(max-width:600px){header{padding:10px 12px 6px}#grid{padding:6px 12px 16px;--g:6px}}
 </style></head><body>
-<header><div class="row"><input id="q" type="search" placeholder="Search names and tags" aria-label="Search">
-<span class="row" id="kinds"></span><select id="sort" aria-label="Sort"><option value="new">Newest</option><option value="old">Oldest</option><option value="name">Name</option><option value="rand">Shuffle</option></select>
+<header><div class="row"><input id="q" type="search" placeholder="Search" aria-label="Search">
+<span class="row" id="kinds"></span><span id="cnt"></span><select id="sort" aria-label="Sort"><option value="new">Newest</option><option value="old">Oldest</option><option value="name">Name</option><option value="rand">Shuffle</option></select>
 <button id="re" title="Rescan folder">Rescan</button><button id="gear">Settings</button></div>
 <div class="row tags" id="tags"></div></header>
-<div id="set"><label>Tile size <input id="s_size" type="range" min="110" max="480"></label>
-<label>Tile shape <select id="s_shape"><option value="1/1">Square</option><option value="4/3">Wide</option><option value="3/4">Tall</option></select></label>
-<label>Image fit <select id="s_fit"><option value="cover">Fill tile</option><option value="contain">Show whole</option></select></label>
+<div id="set"><label>Tile size <input id="s_size" type="range" min="140" max="520"></label>
+<label>Layout <select id="s_shape"><option value="nat">Natural</option><option value="1/1">Square</option><option value="4/3">Wide</option><option value="3/4">Tall</option></select></label>
+<label>Fit (fixed layouts) <select id="s_fit"><option value="cover">Fill</option><option value="contain">Whole</option></select></label>
 <label>Theme <select id="s_theme"><option value="dark">Dark</option><option value="black">Black</option><option value="light">Light</option></select></label>
 <label>Accent <input id="s_ac" type="color"></label>
 <label>Blur until hover <input id="s_blur" type="checkbox"></label>
-<label>Play videos on hover <input id="s_hover" type="checkbox"></label></div>
-<main id="grid"></main><div id="empty" hidden></div>
+<label>Video previews <select id="s_prev"><option value="all">Play visible</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
+<label>Playing at once <select id="s_cap"><option>4</option><option>8</option><option>12</option><option>24</option><option>60</option></select></label></div>
+<main id="grid"></main><div id="end"></div><div id="empty" hidden></div>
 <div id="lb"><div id="stage"></div><div id="bar"><span class="nm" id="nm"></span><span class="row" id="chips"></span>
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="fav">Favorite</button><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={size:220,shape:'1/1',fit:'cover',theme:'dark',accent:'#c9a7ff',blur:false,hover:true,sort:'new',kind:'all'};
+let S={size:240,shape:'nat',fit:'cover',theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:8,sort:'new',kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
-let items=[],view=[],root='',shown=0,cur=-1,tagF=new Set(),seed=1;const BATCH=150;
-function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--s',S.size+'px');r.style.setProperty('--ar',S.shape);
- r.style.setProperty('--fit',S.fit);r.style.setProperty('--ac',S.accent);document.body.classList.toggle('blur',S.blur);
- $('#s_size').value=S.size;$('#s_shape').value=S.shape;$('#s_fit').value=S.fit;$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
- $('#s_blur').checked=S.blur;$('#s_hover').checked=S.hover;$('#sort').value=S.sort}
+let items=[],view=[],root='',shown=0,cur=-1,dirty=false,tagF=new Set(),seed=1,cs=[],hs=[];const BATCH=120,vis=new Set();
+function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--fit',S.fit);r.style.setProperty('--ac',S.accent);
+ document.body.classList.toggle('blur',S.blur);$('#s_size').value=S.size;$('#s_shape').value=S.shape;$('#s_fit').value=S.fit;$('#s_theme').value=S.theme;
+ $('#s_ac').value=S.accent;$('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;$('#sort').value=S.sort}
 function set(k,v){S[k]=v;save();applyS()}
-$('#s_size').oninput=e=>set('size',+e.target.value);$('#s_shape').onchange=e=>set('shape',e.target.value);$('#s_fit').onchange=e=>set('fit',e.target.value);
-$('#s_theme').onchange=e=>set('theme',e.target.value);$('#s_ac').oninput=e=>set('accent',e.target.value);
-$('#s_blur').onchange=e=>set('blur',e.target.checked);$('#s_hover').onchange=e=>set('hover',e.target.checked);
+const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
+bind('#s_size','input',t=>{set('size',+t.value);render(1)});bind('#s_shape','change',t=>{set('shape',t.value);render(1)});
+bind('#s_fit','change',t=>set('fit',t.value));bind('#s_theme','change',t=>set('theme',t.value));bind('#s_ac','input',t=>set('accent',t.value));
+bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');
 $('#sort').onchange=e=>{seed++;set('sort',e.target.value);render()};$('#q').oninput=()=>render();$('#re').onclick=load;
-function hash(s){let h=seed;for(const c of s)h=(h*31+c.charCodeAt(0))|0;return h}
-function render(){
+const hash=s=>{let h=seed;for(const c of s)h=(h*31+c.charCodeAt(0))|0;return h};
+const ratio=it=>{if(S.shape!='nat'){const[a,b]=S.shape.split('/');return a/b}return it.w&&it.h?it.w/it.h:it.kind=='video'?16/9:1};
+const nCols=()=>{const g=$('#grid'),sz=innerWidth<600?S.size*.55:S.size;return Math.max(1,Math.round((g.clientWidth-40)/(sz+10)))};
+function build(){const n=nCols();$('#grid').innerHTML='<div class="c"></div>'.repeat(n);cs=[...$('#grid').children];hs=Array(n).fill(0)}
+function render(keep){
  const q=$('#q').value.trim().toLowerCase();
  const kd=[['all','All'],['image','Images'],['gif','GIFs'],['video','Videos'],['fav','Favorites']];
  $('#kinds').innerHTML=kd.map(([k,l])=>`<button data-k="${k}" class="${S.kind==k?'on':''}">${l}</button>`).join('');
  const base=items.filter(i=>S.kind=='all'||(S.kind=='fav'?i.fav:i.kind==S.kind));
- const cnt={};base.forEach(i=>i.tags.forEach(t=>cnt[t]=(cnt[t]||0)+1));
- [...tagF].forEach(t=>{if(!cnt[t])tagF.delete(t)});
+ const cnt={};base.forEach(i=>i.tags.forEach(t=>cnt[t]=(cnt[t]||0)+1));[...tagF].forEach(t=>{if(!cnt[t])tagF.delete(t)});
  const top=Object.entries(cnt).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,60);
  $('#tags').innerHTML=top.map(([t,n])=>`<button data-t="${esc(t)}" class="${tagF.has(t)?'on':''}">${esc(t)} ${n}</button>`).join('');
  view=base.filter(i=>[...tagF].every(t=>i.tags.includes(t))&&(!q||(i.name+' '+i.tags.join(' ')).toLowerCase().includes(q)));
  const o=S.sort;view.sort(o=='old'?(a,b)=>a.mtime-b.mtime:o=='name'?(a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}):o=='rand'?(a,b)=>hash(a.id)-hash(b.id):(a,b)=>b.mtime-a.mtime);
- $('#grid').innerHTML='';shown=0;more();
+ const want=keep?Math.max(shown,BATCH):BATCH;$('#grid').querySelectorAll('video').forEach(v=>{v.pause();v.removeAttribute('src');v.load()});vio.disconnect();pio.disconnect();vis.clear();build();shown=0;more(want);
+ $('#cnt').textContent=view.length+(view.length==1?' item':' items');
  const em=$('#empty');em.hidden=view.length>0;
  em.textContent=items.length?'Nothing matches these filters.':'No media yet. Put images, GIFs and videos in '+root+' (subfolders become tags), then press Rescan.'}
-const vio=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){const v=e.target;if(!v.src)v.src=v.dataset.src;vio.unobserve(v)}}),{rootMargin:'300px'});
-const sent=new IntersectionObserver(es=>{if(es[0].isIntersecting)more()},{rootMargin:'800px'});
-function more(){const g=$('#grid');sent.disconnect();if(shown>=view.length)return;let h='';
- for(let n=shown;n<Math.min(shown+BATCH,view.length);n++){const it=view[n];
-  h+=`<div class="t" data-i="${n}" tabindex="0" title="${esc(it.name)}">`+(it.kind=='video'?`<video data-src="${it.url}#t=0.1" muted loop playsinline preload="metadata"></video>`:`<img src="${it.url}" loading="lazy" alt="${esc(it.name)}">`)+(it.kind!='image'?`<b>${it.kind}</b>`:'')+(it.fav?'<i>★</i>':'')+'</div>'}
- shown=Math.min(shown+BATCH,view.length);g.insertAdjacentHTML('beforeend',h);g.querySelectorAll('video:not([src])').forEach(v=>vio.observe(v));
- if(g.lastElementChild)sent.observe(g.lastElementChild)}
+const vio=new IntersectionObserver(es=>es.forEach(e=>{const v=e.target;if(e.isIntersecting&&!v.src){v.src=v.dataset.src;vio.unobserve(v)}}),{rootMargin:'500px'});
+const pio=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting)vis.add(e.target);else{vis.delete(e.target);e.target.pause()}});sync()},{threshold:.3});
+const sent=new IntersectionObserver(es=>{if(es[0].isIntersecting)more()},{rootMargin:'1400px'});
+function more(n=BATCH){const end=Math.min(shown+n,view.length);
+ for(let i=shown;i<end;i++){const it=view[i],r=ratio(it),k=hs.indexOf(Math.min(...hs));hs[k]+=1/r+.03;
+  cs[k].insertAdjacentHTML('beforeend',`<div class="t" data-i="${i}" tabindex="0" style="--ar:${r}">`+(it.kind=='video'?`<video data-src="${it.url}#t=0.1" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.url}" loading="lazy" decoding="async" alt="">`)+`<span>${esc(it.name)}</span>`+(it.kind!='image'?`<b>${it.kind}</b>`:'')+(it.fav?'<i>★</i>':'')+'</div>')}
+ shown=end;$('#grid').querySelectorAll('video:not([data-o])').forEach(v=>{v.dataset.o=1;vio.observe(v);pio.observe(v)});
+ sent.unobserve($('#end'));sent.observe($('#end'))}
+function sync(){const on=S.preview=='all'&&cur<0&&!document.hidden;let n=0;
+ [...vis].sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top).forEach(v=>{
+  if(on&&v.src&&n<S.cap){n++;v.muted=true;v.play().catch(()=>{})}
+  else if(S.preview!='hover'||cur>=0||!v.closest('.t').matches(':hover'))v.pause()})}
+document.addEventListener('visibilitychange',sync);
+let rz;addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{if(nCols()!=cs.length)render(1)},200)});
+const g=$('#grid');
+['load','loadeddata','loadedmetadata'].forEach(ev=>g.addEventListener(ev,e=>{const m=e.target;m.classList.add('ld');
+ if(m.tagName=='VIDEO'){if(S.shape=='nat'&&m.videoWidth)m.closest('.t').style.setProperty('--ar',m.videoWidth+'/'+m.videoHeight);sync()}},true));
+g.addEventListener('error',e=>{if(e.target.closest)e.target.closest('.t')?.classList.add('bad')},true);
+g.addEventListener('mouseenter',e=>{if(S.preview!='hover'||cur>=0||!e.target.classList?.contains('t'))return;const v=e.target.querySelector('video');if(v&&v.src){v.muted=true;v.play().catch(()=>{})}},true);
+g.addEventListener('mouseleave',e=>{if(S.preview=='hover'&&e.target.classList?.contains('t')){const v=e.target.querySelector('video');if(v)v.pause()}},true);
 $('#kinds').onclick=e=>{const k=e.target.dataset.k;if(k){set('kind',k);render()}};
 $('#tags').onclick=e=>{const t=e.target.dataset.t;if(t){tagF.has(t)?tagF.delete(t):tagF.add(t);render()}};
 const tileOf=e=>e.target.closest('.t');
-$('#grid').onclick=e=>{const t=tileOf(e);if(t)open(+t.dataset.i)};
-$('#grid').onkeydown=e=>{if(e.key=='Enter'){const t=tileOf(e);if(t)open(+t.dataset.i)}};
-$('#grid').addEventListener('mouseenter',e=>{const v=e.target.tagName=='DIV'&&e.target.querySelector('video');if(v&&S.hover&&v.src)v.play().catch(()=>{})},true);
-$('#grid').addEventListener('mouseleave',e=>{const v=e.target.tagName=='DIV'&&e.target.querySelector('video');if(v)v.pause()},true);
-function open(i){if(i<0||i>=view.length)return;cur=i;const it=view[i];$('#lb').classList.add('open');
+g.onclick=e=>{const t=tileOf(e);if(t)open(+t.dataset.i)};g.onkeydown=e=>{if(e.key=='Enter'){const t=tileOf(e);if(t)open(+t.dataset.i)}};
+function meta(){const it=view[cur];$('#nm').textContent=it.name;$('#fav').classList.toggle('on',it.fav);
+ $('#chips').innerHTML=it.tags.map(t=>`<button class="chip" data-t="${esc(t)}" title="Remove tag">${esc(t)} ×</button>`).join('')}
+function open(i){if(i<0||i>=view.length)return;cur=i;const it=view[i];$('#lb').classList.add('open');sync();
  $('#stage').innerHTML=it.kind=='video'?`<video src="${it.url}" controls controlsList="nodownload" autoplay loop></video>`:`<img src="${it.url}" alt="${esc(it.name)}">`;
  const vd=$('#stage video');if(vd)vd.onerror=async()=>{let c='';try{c=(await(await fetch('/api/codec?id='+encodeURIComponent(it.id))).json()).codec||''}catch{}
   $('#stage').insertAdjacentHTML('beforeend','<p style="color:#bbb;max-width:60ch">This browser can\'t play this video'+(c?' (codec: '+c+')':'')+'. Browsers play H.264 mp4 and VP9 webm reliably. Convert with: ffmpeg -i in.mov -c:v libx264 -c:a aac out.mp4</p>')};
- $('#nm').textContent=it.name;$('#fav').classList.toggle('on',it.fav);
- $('#chips').innerHTML=it.tags.map(t=>`<button class="chip" data-t="${esc(t)}" title="Remove tag">${esc(t)} ×</button>`).join('')}
-function close(){cur=-1;$('#lb').classList.remove('open');$('#stage').innerHTML='';render()}
+ meta()}
+function close(){cur=-1;$('#lb').classList.remove('open');$('#stage').innerHTML='';if(dirty){dirty=false;render(1)}else sync()}
+$('#stage').onclick=e=>{if(e.target.id=='stage')close()};
 async function edit(body){const it=view[cur];try{const r=await fetch('/api/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:it.id,...body})});
- if(!r.ok)throw 0;const n=await r.json();Object.assign(it,n);const j=items.findIndex(x=>x.id==it.id);if(j>=0)items[j]=it;
- const st=$('#stage video');const t=st?st.currentTime:0;open(cur);const v=$('#stage video');if(v&&t)v.currentTime=t}catch{alert('Could not save. Is the server still running?')}}
+ if(!r.ok)throw 0;Object.assign(it,await r.json());dirty=true;meta()}catch{alert('Could not save. Is the server still running?')}}
 $('#chips').onclick=e=>{const t=e.target.dataset.t;if(t)edit({remove:[t]})};
 $('#add').onkeydown=e=>{e.stopPropagation();if(e.key=='Enter'&&e.target.value.trim()){const v=e.target.value.split(',');e.target.value='';edit({add:v})}};
 $('#fav').onclick=()=>edit({fav:!view[cur].fav});$('#prev').onclick=()=>open(cur-1);$('#next').onclick=()=>open(cur+1);$('#x').onclick=close;

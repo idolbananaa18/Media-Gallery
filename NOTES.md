@@ -10,16 +10,20 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 - Scans images (jpg png webp avif bmp), GIFs and videos (mp4 webm mov m4v); hidden files/folders are skipped.
 - Auto tags: type, orientation (png/gif/jpeg only), month added, plus words from folder and file names.
 - Manual tag add/remove (removing an auto tag hides it), favorites. Saved in `gallery_data.json` (git-ignored).
-- Grid with search, type filter, tag filter (multi, AND), sort (newest/oldest/name/shuffle), lightbox with arrow keys, Esc, F to favorite.
-- Customizing: tile size, tile shape, fill/whole fit, dark/black/light theme, accent color, blur until hover, video play on hover. Saved in browser localStorage.
-- Range-request file serving (video seeking), path traversal and host-header checks.
-- Files are served with a fixed MIME table (not the OS one) and `Content-Disposition: inline`; lightbox shows the detected codec (via `/api/codec`) if a video can't be played. Aborted client connections (normal for video) no longer log tracebacks.
+- Masonry grid keeping natural proportions (or fixed square/wide/tall), fade-in loading, infinite scroll, sticky blurred header, search, type filter, multi-tag filter, sort, lightbox (arrows, Esc, F, click outside to close).
+- Videos preview in the grid: all visible ones play muted at once (cap 4-60, default 8), or on hover, or off. Off-screen ones pause; lightbox pauses them.
+- Customizing: tile size, layout, fit, dark/black/light theme, accent color, blur until hover, preview mode and cap. Saved in browser localStorage.
+- Videos are served from extension-less `/v/<hash>` URLs as `application/octet-stream`, aimed at keeping IDM-style download managers from offering to download them. Unverified against IDM.
+- Range responses are capped at 2 MB so many videos can stream without hogging browser connections.
+- Fixed MIME table for images, path traversal and host-header checks, codec message (`/api/codec`) if a video can't play.
 ## Known bugs
-- Not tested in a real browser (only API via curl and page JS via jsdom): layout, hover play, lazy loading and mobile are unverified.
-- Grid loads full-size originals as thumbnails; large libraries will be slow. Video tiles rely on the browser showing the first frame.
-- Orientation tag missing for videos and webp/avif/bmp (no dimension parsing).
-- Reported twice: browser asks to download videos (images fine). Fixed MIME/inline did not resolve it. Suspects: unsupported codec (HEVC) or a download-manager extension (e.g. IDM) hooking `<video>`. Unconfirmed.
-- Codec detection only scans the first/last 4 MB of a file and is untested with moov-at-end files.
+- Not tested in a real browser (only API via curl and page JS via jsdom): layout, masonry, real playback, mobile are unverified.
+- IDM avoidance (neutral URL/content type) is untested against IDM. Fallback: add 127.0.0.1 to IDM's download panel exceptions (Options > General > Customize IDM Download panels > Exceptions).
+- Octet-stream video type is untested in Firefox/Safari.
+- Grid loads full-size originals as thumbnails; large libraries will be slow.
+- Video tile proportions start at 16:9 and snap to the real ratio once metadata loads (slight shift, rotated phone videos may differ until then).
+- Orientation tag missing for videos and webp/avif/bmp.
+- Codec detection scans only the first/last 4 MB; untested with moov-at-end files.
 - mkv/avi and other formats browsers can't play are not supported.
 - Rescan re-walks the folder each time; no file watcher.
 ## Decisions (do not undo without asking me)
@@ -28,10 +32,11 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 - `media/` and `gallery_data.json` are git-ignored so media is never pushed.
 - Tags are derived from folder/file names and metadata only, no ML classifier.
 - UI settings live in browser localStorage; tag edits and favorites live in `gallery_data.json`.
+- (Added at user's request) Videos are previewed simultaneously in the grid, served via neutral `/v/` URLs; layout is masonry with natural proportions by default.
 ## Next (ordered, each small enough for one session)
-1. Test in a real browser and fix layout/hover issues.
-2. Generate real thumbnails (ffmpeg if present, cached) for images, GIFs and videos.
+1. Test in a real browser (Windows, Chrome/Edge with IDM) and fix layout/playback issues.
+2. Generate real thumbnails/short preview clips (ffmpeg if present, cached) so big libraries and many simultaneous videos stay light.
 3. Video duration/resolution tags via ffprobe when available.
 4. Bulk select and bulk tag/delete.
 ## Last session
-Windows log showed ConnectionAbortedError tracebacks: now ignored (ConnectionError suppressed, write loop catches OSError). Added `/api/codec` and a lightbox message naming the codec plus an ffmpeg H.264 convert command; `controlsList=nodownload` on lightbox video. Tested with H.264/HEVC/VP9 samples, traversal/absolute-path probes, aborted transfer, jsdom error path. Download-prompt cause still unconfirmed.
+Rebuilt UI: masonry with natural proportions, fade-in, blurred sticky header, animated settings/lightbox, simultaneous muted video previews with cap and off-screen pausing. Server: videos via `/v/<hash>` as octet-stream, 2 MB range chunks, grid teardown releases videos. Verified with curl (ranges, bytes, 404s, headers) and jsdom (render, filters, play cap, settings, lightbox, edits). No real browser or IDM available.
