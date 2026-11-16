@@ -13,12 +13,13 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 - Grid with search, type filter, tag filter (multi, AND), sort (newest/oldest/name/shuffle), lightbox with arrow keys, Esc, F to favorite.
 - Customizing: tile size, tile shape, fill/whole fit, dark/black/light theme, accent color, blur until hover, video play on hover. Saved in browser localStorage.
 - Range-request file serving (video seeking), path traversal and host-header checks.
-- Files are served with a fixed MIME table (not the OS one) and `Content-Disposition: inline`; lightbox shows a message if a video can't be played.
+- Files are served with a fixed MIME table (not the OS one) and `Content-Disposition: inline`; lightbox shows the detected codec (via `/api/codec`) if a video can't be played. Aborted client connections (normal for video) no longer log tracebacks.
 ## Known bugs
 - Not tested in a real browser (only API via curl and page JS via jsdom): layout, hover play, lazy loading and mobile are unverified.
 - Grid loads full-size originals as thumbnails; large libraries will be slow. Video tiles rely on the browser showing the first frame.
 - Orientation tag missing for videos and webp/avif/bmp (no dimension parsing).
-- Reported: browser prompted to download files. Attempted fix (fixed MIME + inline) is verified via headers only; cause not confirmed on the user's machine.
+- Reported twice: browser asks to download videos (images fine). Fixed MIME/inline did not resolve it. Suspects: unsupported codec (HEVC) or a download-manager extension (e.g. IDM) hooking `<video>`. Unconfirmed.
+- Codec detection only scans the first/last 4 MB of a file and is untested with moov-at-end files.
 - mkv/avi and other formats browsers can't play are not supported.
 - Rescan re-walks the folder each time; no file watcher.
 ## Decisions (do not undo without asking me)
@@ -33,4 +34,4 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 3. Video duration/resolution tags via ffprobe when available.
 4. Bulk select and bulk tag/delete.
 ## Last session
-Fixed likely cause of download prompts: hard-coded MIME types for all supported extensions, `Content-Disposition: inline`, no reliance on system mimetypes. Added video error message in lightbox. Verified headers with curl (incl. uppercase .JPG) and jsdom UI test. Not confirmed in a real browser.
+Windows log showed ConnectionAbortedError tracebacks: now ignored (ConnectionError suppressed, write loop catches OSError). Added `/api/codec` and a lightbox message naming the codec plus an ffmpeg H.264 convert command; `controlsList=nodownload` on lightbox video. Tested with H.264/HEVC/VP9 samples, traversal/absolute-path probes, aborted transfer, jsdom error path. Download-prompt cause still unconfirmed.

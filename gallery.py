@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Local media gallery. Run: python3 gallery.py [--media DIR] [--port N]
 Serves on 127.0.0.1 only. Stdlib only; UI is embedded below."""
-import argparse, json, os, re, struct, threading, time
+import argparse, json, os, sys, re, struct, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, unquote, quote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 HERE = Path(__file__).resolve().parent
 KIND = {".gif": "gif"}
@@ -17,6 +17,33 @@ LOCK = threading.Lock()
 ROOT = HERE / "media"
 DATA_FILE = HERE / "gallery_data.json"
 INDEX, CACHE = {}, {}
+CODECS = {b"avc1": "H.264", b"hvc1": "H.265/HEVC", b"hev1": "H.265/HEVC", b"av01": "AV1", b"vp09": "VP9",
+          b"vp08": "VP8", b"mp4v": "MPEG-4 Part 2", b"apch": "ProRes", b"apcn": "ProRes"}
+
+
+def safe(rel):
+    """Resolved path of a servable media file inside ROOT, else None."""
+    try:
+        p = (ROOT / rel).resolve()
+        parts = p.relative_to(ROOT).parts
+    except (ValueError, OSError):
+        return None
+    if not p.is_file() or p.suffix.lower() not in KIND or any(s.startswith(".") for s in parts): return None
+    return p
+
+
+def codec(p):
+    """Best-effort video codec name from the mp4/mov header or trailer."""
+    if p.suffix.lower() == ".webm": return "WebM (VP8/VP9/AV1)"
+    try:
+        size, n = p.stat().st_size, 4_000_000
+        with open(p, "rb") as f:
+            blob = f.read(n)
+            if size > n: f.seek(max(n, size - n)); blob += f.read()
+    except OSError:
+        return None
+    hits = [(blob.find(k), v) for k, v in CODECS.items() if k in blob]
+    return min(hits)[1] if hits else None
 
 
 def dims(p):
@@ -153,6 +180,9 @@ class H(BaseHTTPRequestHandler):
         if path == "/": return self.send(200, PAGE.encode(), "text/html; charset=utf-8", [("Cache-Control", "no-store")])
         if path == "/api/items":
             return self.send(200, json.dumps({"root": str(ROOT), "items": scan()}).encode(), "application/json", [("Cache-Control", "no-store")])
+        if path == "/api/codec":
+            p = safe(parse_qs(urlparse(self.path).query).get("id", [""])[0])
+            return self.send(200, json.dumps({"codec": codec(p) if p else None}).encode(), "application/json")
         if path.startswith("/f/"): return self.file(unquote(path[3:]))
         self.send(404, b"not found")
 
@@ -172,11 +202,8 @@ class H(BaseHTTPRequestHandler):
         self.send(200, json.dumps(out).encode(), "application/json")
 
     def file(self, rel):
-        p = (ROOT / rel).resolve()
-        try: parts = p.relative_to(ROOT).parts
-        except ValueError: return self.send(404, b"not found")
-        if not p.is_file() or p.suffix.lower() not in KIND or any(s.startswith(".") for s in parts):
-            return self.send(404, b"not found")
+        p = safe(rel)
+        if not p: return self.send(404, b"not found")
         size = p.stat().st_size
         start, end, code = 0, size - 1, 200
         m = re.match(r"bytes=(\d*)-(\d*)$", (self.headers.get("Range") or "").strip())
@@ -203,7 +230,7 @@ class H(BaseHTTPRequestHandler):
                     b = f.read(min(262144, left))
                     if not b: break
                     self.wfile.write(b); left -= len(b)
-        except (BrokenPipeError, ConnectionResetError): pass
+        except OSError: pass  # client aborted (normal for video seeking)
 
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -297,8 +324,9 @@ $('#grid').onkeydown=e=>{if(e.key=='Enter'){const t=tileOf(e);if(t)open(+t.datas
 $('#grid').addEventListener('mouseenter',e=>{const v=e.target.tagName=='DIV'&&e.target.querySelector('video');if(v&&S.hover&&v.src)v.play().catch(()=>{})},true);
 $('#grid').addEventListener('mouseleave',e=>{const v=e.target.tagName=='DIV'&&e.target.querySelector('video');if(v)v.pause()},true);
 function open(i){if(i<0||i>=view.length)return;cur=i;const it=view[i];$('#lb').classList.add('open');
- $('#stage').innerHTML=it.kind=='video'?`<video src="${it.url}" controls autoplay loop></video>`:`<img src="${it.url}" alt="${esc(it.name)}">`;
- const vd=$('#stage video');if(vd)vd.onerror=()=>{$('#stage').insertAdjacentHTML('beforeend','<p style="color:#bbb">This browser can\'t play this file (format or codec).</p>')};
+ $('#stage').innerHTML=it.kind=='video'?`<video src="${it.url}" controls controlsList="nodownload" autoplay loop></video>`:`<img src="${it.url}" alt="${esc(it.name)}">`;
+ const vd=$('#stage video');if(vd)vd.onerror=async()=>{let c='';try{c=(await(await fetch('/api/codec?id='+encodeURIComponent(it.id))).json()).codec||''}catch{}
+  $('#stage').insertAdjacentHTML('beforeend','<p style="color:#bbb;max-width:60ch">This browser can\'t play this video'+(c?' (codec: '+c+')':'')+'. Browsers play H.264 mp4 and VP9 webm reliably. Convert with: ffmpeg -i in.mov -c:v libx264 -c:a aac out.mp4</p>')};
  $('#nm').textContent=it.name;$('#fav').classList.toggle('on',it.fav);
  $('#chips').innerHTML=it.tags.map(t=>`<button class="chip" data-t="${esc(t)}" title="Remove tag">${esc(t)} ×</button>`).join('')}
 function close(){cur=-1;$('#lb').classList.remove('open');$('#stage').innerHTML='';render()}
@@ -315,13 +343,20 @@ applyS();load();
 </script></body></html>"""
 
 
+class Srv(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], ConnectionError): super().handle_error(request, client_address)
+
+
 def main():
     global ROOT
     ap = argparse.ArgumentParser()
     ap.add_argument("--media", default=str(HERE / "media")); ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args()
     ROOT = Path(a.media).expanduser().resolve(); ROOT.mkdir(parents=True, exist_ok=True)
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), H); srv.daemon_threads = True
+    srv = Srv(("127.0.0.1", a.port), H)
     print(f"Gallery: http://127.0.0.1:{a.port}  (media: {ROOT})")
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
