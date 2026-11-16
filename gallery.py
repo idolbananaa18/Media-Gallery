@@ -284,7 +284,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f{position:relative;cursor:pointer;animation:sw var(--du) ease-in-out var(--de) infinite alternate}
 .f:hover{animation-play-state:paused}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
-.g{position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
+.g{position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease,translate .6s cubic-bezier(.22,.8,.25,1)}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
 .g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}
 .g>.ld{opacity:1}
 .g>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
@@ -347,7 +347,7 @@ function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.sty
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_pull','input',t=>set('pull',t.value/100));bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -384,17 +384,16 @@ function mk(i){const it=view[i],p=pos[i],h=h32(it.id),m=document.createElement('
  m.innerHTML=`<div class="f" style="width:${p.w}px;height:${p.h}px;--dx:${h%17-8}px;--dy:${(h>>>5)%17-8}px;--rt:${((h>>>9)%9-4)/10}deg;--du:${9+(h>>>13)%9}s;--de:-${(h>>>3)%10}s"><div class="g">`
  +(it.kind=='video'?`<video src="${it.url}" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
  world.appendChild(m);return m}
-let hov=null;const pulled=new Set(),ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0;
-function hoverPull(z,vw,vh,dt){if(hov&&!hov.isConnected)hov=null;if(hov)pulled.add(hov);if(!pulled.size)return;const k=1-Math.exp(-dt/90);
- pulled.forEach(m=>{if(!m.isConnected){pulled.delete(m);return}const f=m.firstChild,p=pos[+m.dataset.i];let tx=0,ty=0;
-  /* target is measured from the unmoved hitbox (.f) against the CURRENT screen centre, so it keeps following while you pan */
-  if(m===hov&&p&&cur<0&&S.pull>0){tx=(vw/2-((p.x+p.w/2)*z-cx))*S.pull/z;ty=(vh/2-((p.y+p.h/2)*z-cy))*S.pull/z}
-  const ox=f._ox||0,oy=f._oy||0,nx=ox+(tx-ox)*k,ny=oy+(ty-oy)*k;
-  if(m!==hov&&Math.abs(nx)<.2&&Math.abs(ny)<.2){f._ox=f._oy=0;f.style.removeProperty('--hx');f.style.removeProperty('--hy');pulled.delete(m);return}
-  f._ox=nx;f._oy=ny;f.style.setProperty('--hx',nx.toFixed(1)+'px');f.style.setProperty('--hy',ny.toFixed(1)+'px')})}
-world.addEventListener('mouseover',e=>{const m=e.target.closest&&e.target.closest('.m');if(m)hov=m});
-world.addEventListener('mouseout',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m===hov&&!(e.relatedTarget&&m.contains(e.relatedTarget)))hov=null});
-function drop(m){if(m===hov)hov=null;pulled.delete(m);const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load()}m.remove()}
+let hov=null;const ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0;
+/* Hover pull: the target is captured ONCE when the pointer enters a tile (where the screen centre is at that moment) and then stays fixed,
+   so the tile glides there and stays put, even if the wall pans afterwards. The unmoved .f remains the hover hitbox; only .g moves. */
+function pullTo(m){const f=m.firstChild,p=pos[+m.dataset.i];if(!f||!p)return;const z=S.zoom,k=cur<0?S.pull:0;
+ const dx=k?Math.round((innerWidth/2-((p.x+p.w/2)*z-cx))*k/z):0,dy=k?Math.round((innerHeight/2-((p.y+p.h/2)*z-cy))*k/z):0;
+ f.style.setProperty('--hx',dx+'px');f.style.setProperty('--hy',dy+'px')}
+function unpull(m){const f=m&&m.firstChild;if(f){f.style.removeProperty('--hx');f.style.removeProperty('--hy')}}
+world.addEventListener('mouseover',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m!==hov){unpull(hov);hov=m;pullTo(m)}});
+world.addEventListener('mouseout',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m===hov&&!(e.relatedTarget&&m.contains(e.relatedTarget))){unpull(m);hov=null}});
+function drop(m){if(m===hov)hov=null;const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load()}m.remove()}
 function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidth+mg)/z,y1=(cy+innerHeight+mg)/z;
  for(let i=0;i<pos.length;i++){const p=pos[i],v=p.x<x1&&p.x+p.w>x0&&p.y<y1&&p.y+p.h>y0;
   if(v&&!live.has(i))live.set(i,mk(i));else if(!v&&live.has(i)){drop(live.get(i));live.delete(i)}}
@@ -410,7 +409,7 @@ let last=0;function frame(t){requestAnimationFrame(frame);const dt=Math.min(100,
  if(t-lastMove>7000){a=.5+.4*Math.sin(t/23000);b=.5+.4*Math.cos(t/31000)}
  tx=Ws>vw?a*(Ws-vw):(Ws-vw)/2;ty=Hs>vh?b*(Hs-vh):(Hs-vh)/2;
  if(snap){cx=tx;cy=ty;snap=false}else{const k=1-Math.exp(-dt/280);cx+=(tx-cx)*k;cy+=(ty-cy)*k}
- world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;hoverPull(z,vw,vh,dt);if(vdirty&&S.vfocus>0&&t-lastSync>250)sync();if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
+ world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;if(vdirty&&S.vfocus>0&&t-lastSync>250)sync();if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
 addEventListener('pointermove',e=>{if(e.target.closest&&e.target.closest('header,#set,#lb'))return;
  fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));ptr.x=e.clientX;ptr.y=e.clientY;ptr.has=true;vdirty=true;lastMove=performance.now()});
 addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>relayout(true),300)});document.addEventListener('visibilitychange',sync);
