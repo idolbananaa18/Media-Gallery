@@ -360,8 +360,8 @@ function render(first){const nv=strip(),em=$('#empty');em.hidden=nv.length>0;
  em.textContent=items.length?'Nothing matches these filters.':'No media yet. Put images, GIFs and videos in '+root+' (subfolders become tags), then press Rescan.';relayout(!first,nv)}
 function relayout(fade,nv){clearTimeout(rt);const go=()=>{if(nv)view=nv;rebuild()};if(fade){world.classList.add('out');rt=setTimeout(()=>{go();world.classList.remove('out')},230)}else go()}
 function rebuild(){live.forEach(drop);live.clear();world.innerHTML='';layout();snap=true;cull()}
-const TILE=340*340;/* target display area; every item keeps its native aspect ratio but is scaled to this area */
-function dsz(w,h){if(!(w>0&&h>0))return{w:340,h:340};const s=Math.sqrt(TILE/(w*h));return{w:Math.max(1,Math.round(w*s)),h:Math.max(1,Math.round(h*s))}}
+const TILEH=340;/* every item is this tall; width follows the item's native aspect ratio */
+function dsz(w,h){if(!(w>0&&h>0))return{w:TILEH,h:TILEH};return{w:Math.max(1,Math.round(TILEH*w/h)),h:TILEH}}
 function layout(){const z=S.zoom,vw=innerWidth,vh=innerHeight,GAP=44;
  const L=view.map((it,i)=>({i,...dsz(it.w||(it.kind=='video'?16:1),it.h||(it.kind=='video'?9:1))}));pos=new Array(L.length);
  let A=0,mw=0;L.forEach(t=>{A+=(t.w+GAP)*(t.h+GAP);mw=Math.max(mw,t.w)});A*=1.8;
