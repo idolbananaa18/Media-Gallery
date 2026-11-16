@@ -20,7 +20,7 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 - IDM avoidance (neutral URL/content type) is untested against IDM. Fallback: add 127.0.0.1 to IDM's download panel exceptions (Options > General > Customize IDM Download panels > Exceptions).
 - Octet-stream video type is untested in Firefox/Safari.
 - Items are normalised to the same display area, so the canvas size no longer depends on file resolution; tune `TILEH` in the JS if tiles feel too big/small (Zoom also scales).
-- Items whose size the server can't read (webm, avif) start as a placeholder size and snap to real size on load, so they can briefly overlap neighbours.
+- Items whose size the server can't read (webm, avif) are measured in the browser before layout (`measure()`, 4s per item, 6s total); any that time out still snap to real size on load and can overlap neighbours.
 - Layout is random scatter: some wasted space/clusters; changes when the filtered set changes.
 - Images load at full size; many large images in view can be heavy.
 - Codec detection scans only the first/last 4 MB.

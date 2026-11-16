@@ -423,7 +423,14 @@ $('#prev').onclick=()=>open(cur-1);$('#next').onclick=()=>open(cur+1);$('#x').on
 document.onkeydown=e=>{if(e.target.tagName=='INPUT')return;
  if(cur>=0){if(e.key=='Escape')close();else if(e.key=='ArrowLeft')open(cur-1);else if(e.key=='ArrowRight')open(cur+1)}
  else if(e.key=='h'||e.key=='H')hide(!document.body.classList.contains('hide'));else if(e.key=='Escape')hide(false)};
-async function load(){try{const r=await fetch('/api/items');const d=await r.json();items=d.items;root=d.root}catch{items=[];root='the media folder'}render(!W)}
+/* The server can't read some sizes (webm, avif...): measure those in the browser BEFORE layout so tiles never resize/overlap later. */
+function probe(it){return new Promise(ok=>{const v=it.kind=='video',e=document.createElement(v?'video':'img');let t;
+ const end=()=>{clearTimeout(t);if(v){e.removeAttribute('src');e.load()}else e.src='';ok()};
+ e.onload=e.onloadedmetadata=()=>{const w=e.naturalWidth||e.videoWidth,h=e.naturalHeight||e.videoHeight;if(w&&h){it.w=w;it.h=h}end()};e.onerror=end;t=setTimeout(end,4000);
+ if(v)e.preload='metadata';e.src=it.url})}
+async function measure(list){const q=list.filter(i=>!(i.w>0&&i.h>0));let n=0;
+ await Promise.race([Promise.all(Array.from({length:Math.min(8,q.length)},async()=>{while(n<q.length)await probe(q[n++])})),new Promise(r=>setTimeout(r,6000))])}
+async function load(){try{const r=await fetch('/api/items');const d=await r.json();items=d.items;root=d.root;await measure(items)}catch{items=[];root='the media folder'}render(!W)}
 applyS();requestAnimationFrame(frame);load();
 </script></body></html>"""
 
