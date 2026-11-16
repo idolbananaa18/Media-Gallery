@@ -298,7 +298,7 @@ header{position:fixed;z-index:5;top:14px;left:20px;right:20px;padding:10px 12px;
 .tags button{white-space:nowrap;padding:2px 11px;color:var(--mut);border-color:transparent;background:var(--tile)}.tags button.on{color:#141416;background:var(--ac)}
 #set{position:fixed;right:20px;top:calc(14px + var(--hh,96px) + 8px);z-index:6;background:var(--bg);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;gap:12px;flex-direction:column;width:270px;box-shadow:0 16px 48px #0006;opacity:0;pointer-events:none;transform:translateY(-6px)}
 #set.open{opacity:1;pointer-events:auto;transform:none}#set label{display:flex;justify-content:space-between;align-items:center;gap:10px;color:var(--mut)}
-#empty{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:40px;color:var(--mut);pointer-events:none}
+#empty{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:40px;color:var(--mut);pointer-events:none}#empty[hidden]{display:none}
 #hint{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--tile);border:1px solid var(--line);border-radius:99px;padding:7px 16px;color:var(--mut);opacity:0;pointer-events:none;z-index:9}#hint.show{opacity:1}
 #dot{display:none;position:fixed;left:10px;top:10px;width:28px;height:28px;padding:0;border-radius:50%;opacity:.12;z-index:9}
 @media(pointer:coarse){body.hide #dot{display:block}}
