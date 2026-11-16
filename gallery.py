@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local media gallery. Run: python3 gallery.py [--media DIR] [--port N]
 Serves on 127.0.0.1 only. Stdlib only; UI is embedded below."""
-import argparse, json, mimetypes, os, re, struct, threading, time
+import argparse, json, os, re, struct, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, unquote, quote
@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 KIND = {".gif": "gif"}
 KIND.update({"." + e: "image" for e in "jpg jpeg png webp avif bmp".split()})
 KIND.update({"." + e: "video" for e in "mp4 webm mov m4v".split()})
-MIME = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".bmp": "image/bmp", ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
         ".avif": "image/avif", ".webp": "image/webp"}
 STOP = set("img image vid video gif the and with copy final new untitled download file dsc pxl screenshot mov mp4 jpg jpeg png webm webp avif bmp".split())
 LOCK = threading.Lock()
@@ -188,10 +188,10 @@ class H(BaseHTTPRequestHandler):
             if start > end or start >= size:
                 return self.send(416, b"", extra=[("Content-Range", f"bytes */{size}")])
             code = 206
-        ctype = MIME.get(p.suffix.lower()) or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        ctype = MIME.get(p.suffix.lower(), "application/octet-stream")
         self.send_response(code)
         for k, v in (("Content-Type", ctype), ("Accept-Ranges", "bytes"), ("Content-Length", str(max(0, end - start + 1))),
-                     ("Cache-Control", "private, max-age=300"), ("X-Content-Type-Options", "nosniff")):
+                     ("Cache-Control", "private, max-age=300"), ("Content-Disposition", "inline"), ("X-Content-Type-Options", "nosniff")):
             self.send_header(k, v)
         if code == 206: self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
@@ -298,6 +298,7 @@ $('#grid').addEventListener('mouseenter',e=>{const v=e.target.tagName=='DIV'&&e.
 $('#grid').addEventListener('mouseleave',e=>{const v=e.target.tagName=='DIV'&&e.target.querySelector('video');if(v)v.pause()},true);
 function open(i){if(i<0||i>=view.length)return;cur=i;const it=view[i];$('#lb').classList.add('open');
  $('#stage').innerHTML=it.kind=='video'?`<video src="${it.url}" controls autoplay loop></video>`:`<img src="${it.url}" alt="${esc(it.name)}">`;
+ const vd=$('#stage video');if(vd)vd.onerror=()=>{$('#stage').insertAdjacentHTML('beforeend','<p style="color:#bbb">This browser can\'t play this file (format or codec).</p>')};
  $('#nm').textContent=it.name;$('#fav').classList.toggle('on',it.fav);
  $('#chips').innerHTML=it.tags.map(t=>`<button class="chip" data-t="${esc(t)}" title="Remove tag">${esc(t)} ×</button>`).join('')}
 function close(){cur=-1;$('#lb').classList.remove('open');$('#stage').innerHTML='';render()}

@@ -13,10 +13,12 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 - Grid with search, type filter, tag filter (multi, AND), sort (newest/oldest/name/shuffle), lightbox with arrow keys, Esc, F to favorite.
 - Customizing: tile size, tile shape, fill/whole fit, dark/black/light theme, accent color, blur until hover, video play on hover. Saved in browser localStorage.
 - Range-request file serving (video seeking), path traversal and host-header checks.
+- Files are served with a fixed MIME table (not the OS one) and `Content-Disposition: inline`; lightbox shows a message if a video can't be played.
 ## Known bugs
 - Not tested in a real browser (only API via curl and page JS via jsdom): layout, hover play, lazy loading and mobile are unverified.
 - Grid loads full-size originals as thumbnails; large libraries will be slow. Video tiles rely on the browser showing the first frame.
 - Orientation tag missing for videos and webp/avif/bmp (no dimension parsing).
+- Reported: browser prompted to download files. Attempted fix (fixed MIME + inline) is verified via headers only; cause not confirmed on the user's machine.
 - mkv/avi and other formats browsers can't play are not supported.
 - Rescan re-walks the folder each time; no file watcher.
 ## Decisions (do not undo without asking me)
@@ -31,4 +33,4 @@ A smooth minimalistic but efficient and clean pornographic media gallery for vid
 3. Video duration/resolution tags via ffprobe when available.
 4. Bulk select and bulk tag/delete.
 ## Last session
-Built first version: `gallery.py`, `.gitignore`, this file. Verified API with curl (listing, tags, ranges, 416, traversal 404, host 403, edits persist) and page logic with jsdom (filters, search, sort, lightbox, tag edit, favorites, settings). No real browser available.
+Fixed likely cause of download prompts: hard-coded MIME types for all supported extensions, `Content-Disposition: inline`, no reliance on system mimetypes. Added video error message in lightbox. Verified headers with curl (incl. uppercase .JPG) and jsdom UI test. Not confirmed in a real browser.
