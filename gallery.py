@@ -284,7 +284,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f{position:relative;cursor:pointer;animation:sw var(--du) ease-in-out var(--de) infinite alternate}
 .f:hover{animation-play-state:paused}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
-.g{position:relative;width:100%;height:100%;transition:transform .4s ease}.f:hover>.g{transform:translate(var(--hx,0px),var(--hy,0px)) scale(var(--hs,1.02))}.nolabels .g>span{display:none}
+.g{position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
 .g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}
 .g>.ld{opacity:1}
 .g>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
@@ -319,7 +319,7 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <span class="row" id="kinds"></span><span id="cnt"></span><button id="re" title="Rescan folder">Rescan</button><button id="gear">Settings</button><button id="hide" title="Hide controls (H)">Hide</button></div>
 <div class="row tags" id="tags"></div></header>
 <div id="set"><label>Zoom <input id="s_zoom" type="range" min="25" max="200" step="5"></label>
-<label title="How much a tile grows when hovered (100% = no growth)">Hover grow <input id="s_hover" type="range" min="100" max="150" step="1"></label>
+<label title="How much a tile grows when hovered (100% = no growth)">Hover grow <input id="s_hover" type="range" min="100" max="300" step="1"></label>
 <label title="Scene size: media stays the same size, gaps grow, and the mouse travels further across it">Spread <input id="s_spread" type="range" min="75" max="400" step="25"></label>
 <label>Sway <select id="s_sway"><option value="0">Off</option><option value="1">Gentle</option><option value="2.5">Strong</option></select></label>
 <label>Theme <select id="s_theme"><option value="dark">Dark</option><option value="black">Black</option><option value="light">Light</option></select></label>
@@ -327,6 +327,7 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <label>Blur until hover <input id="s_blur" type="checkbox"></label>
 <label>Show names <input id="s_labels" type="checkbox"></label>
 <label title="On hover, the tile slides toward the centre of your screen. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
+<label title="Which videos play (when limited by the playing cap): those nearest the centre of the screen (0%) or nearest your mouse (100%)">Video focus <input id="s_vf" type="range" min="0" max="100" step="10"></label>
 <label>Video previews <select id="s_prev"><option value="all">Play in view</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
 <label>Playing at once <select id="s_cap"><option>3</option><option>6</option><option>10</option><option>16</option><option>30</option></select></label></div>
 <div id="empty" hidden></div><div id="hint">Press H to bring the controls back</div><button id="dot" aria-label="Show controls"></button>
@@ -334,19 +335,19 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,hover:1.02,pull:0,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,hover:1.02,pull:0,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=1.5))S.hover=1.02;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
 function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);r.style.setProperty('--hs',S.hover);
- document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+ document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_pull','input',t=>set('pull',t.value/100));bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_pull','input',t=>set('pull',t.value/100));bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -383,19 +384,22 @@ function mk(i){const it=view[i],p=pos[i],h=h32(it.id),m=document.createElement('
  m.innerHTML=`<div class="f" style="width:${p.w}px;height:${p.h}px;--dx:${h%17-8}px;--dy:${(h>>>5)%17-8}px;--rt:${((h>>>9)%9-4)/10}deg;--du:${9+(h>>>13)%9}s;--de:-${(h>>>3)%10}s"><div class="g">`
  +(it.kind=='video'?`<video src="${it.url}" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
  world.appendChild(m);return m}
-let hov=null;
-function hoverPull(z,vw,vh){if(hov&&!hov.isConnected)hov=null;if(!hov)return;const p=pos[+hov.dataset.i],f=hov.firstChild;if(!p||!f)return;
- /* measured from the unmoved hitbox (.f), so the moving visual never feeds back into its own target */
- const k=cur<0?S.pull:0,dx=Math.round((vw/2-((p.x+p.w/2)*z-cx))*k/z*2)/2,dy=Math.round((vh/2-((p.y+p.h/2)*z-cy))*k/z*2)/2;
- if(f._hx!==dx||f._hy!==dy){f._hx=dx;f._hy=dy;f.style.setProperty('--hx',dx+'px');f.style.setProperty('--hy',dy+'px')}}
+let hov=null;const pulled=new Set(),ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0;
+function hoverPull(z,vw,vh,dt){if(hov&&!hov.isConnected)hov=null;if(hov)pulled.add(hov);if(!pulled.size)return;const k=1-Math.exp(-dt/90);
+ pulled.forEach(m=>{if(!m.isConnected){pulled.delete(m);return}const f=m.firstChild,p=pos[+m.dataset.i];let tx=0,ty=0;
+  /* target is measured from the unmoved hitbox (.f) against the CURRENT screen centre, so it keeps following while you pan */
+  if(m===hov&&p&&cur<0&&S.pull>0){tx=(vw/2-((p.x+p.w/2)*z-cx))*S.pull/z;ty=(vh/2-((p.y+p.h/2)*z-cy))*S.pull/z}
+  const ox=f._ox||0,oy=f._oy||0,nx=ox+(tx-ox)*k,ny=oy+(ty-oy)*k;
+  if(m!==hov&&Math.abs(nx)<.2&&Math.abs(ny)<.2){f._ox=f._oy=0;f.style.removeProperty('--hx');f.style.removeProperty('--hy');pulled.delete(m);return}
+  f._ox=nx;f._oy=ny;f.style.setProperty('--hx',nx.toFixed(1)+'px');f.style.setProperty('--hy',ny.toFixed(1)+'px')})}
 world.addEventListener('mouseover',e=>{const m=e.target.closest&&e.target.closest('.m');if(m)hov=m});
 world.addEventListener('mouseout',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m===hov&&!(e.relatedTarget&&m.contains(e.relatedTarget)))hov=null});
-function drop(m){if(m===hov)hov=null;const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load()}m.remove()}
+function drop(m){if(m===hov)hov=null;pulled.delete(m);const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load()}m.remove()}
 function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidth+mg)/z,y1=(cy+innerHeight+mg)/z;
  for(let i=0;i<pos.length;i++){const p=pos[i],v=p.x<x1&&p.x+p.w>x0&&p.y<y1&&p.y+p.h>y0;
   if(v&&!live.has(i))live.set(i,mk(i));else if(!v&&live.has(i)){drop(live.get(i));live.delete(i)}}
  lc={x:cx,y:cy};sync()}
-function sync(){const z=S.zoom,on=S.preview=='all'&&cur<0&&!document.hidden,x0=cx/z,y0=cy/z,x1=(cx+innerWidth)/z,y1=(cy+innerHeight)/z,mx=(x0+x1)/2,my=(y0+y1)/2,vs=[];
+function sync(){vdirty=false;lastSync=performance.now();const z=S.zoom,on=S.preview=='all'&&cur<0&&!document.hidden,x0=cx/z,y0=cy/z,x1=(cx+innerWidth)/z,y1=(cy+innerHeight)/z,fw=ptr.has?S.vfocus:0,mx=(cx+innerWidth/2*(1-fw)+ptr.x*fw)/z,my=(cy+innerHeight/2*(1-fw)+ptr.y*fw)/z,vs=[];
  live.forEach((m,i)=>{const v=m.querySelector('video');if(!v)return;const p=pos[i];
   vs.push({m,v,inV:p.x<x1&&p.x+p.w>x0&&p.y<y1&&p.y+p.h>y0,d:Math.hypot(p.x+p.w/2-mx,p.y+p.h/2-my)})});
  vs.sort((a,b)=>a.d-b.d);let n=0;
@@ -406,9 +410,9 @@ let last=0;function frame(t){requestAnimationFrame(frame);const dt=Math.min(100,
  if(t-lastMove>7000){a=.5+.4*Math.sin(t/23000);b=.5+.4*Math.cos(t/31000)}
  tx=Ws>vw?a*(Ws-vw):(Ws-vw)/2;ty=Hs>vh?b*(Hs-vh):(Hs-vh)/2;
  if(snap){cx=tx;cy=ty;snap=false}else{const k=1-Math.exp(-dt/280);cx+=(tx-cx)*k;cy+=(ty-cy)*k}
- world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;hoverPull(z,vw,vh);if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
+ world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;hoverPull(z,vw,vh,dt);if(vdirty&&S.vfocus>0&&t-lastSync>250)sync();if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
 addEventListener('pointermove',e=>{if(e.target.closest&&e.target.closest('header,#set,#lb'))return;
- fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));lastMove=performance.now()});
+ fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));ptr.x=e.clientX;ptr.y=e.clientY;ptr.has=true;vdirty=true;lastMove=performance.now()});
 addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>relayout(true),300)});document.addEventListener('visibilitychange',sync);
 function fit(m){const f=m.closest('.f');if(!f)return;const i=+f.parentNode.dataset.i,it=view[i],p=pos[i],w=m.naturalWidth||m.videoWidth,h=m.naturalHeight||m.videoHeight;
  if(it&&p&&w&&h&&(it.w!=w||it.h!=h)){it.w=w;it.h=h;const d=dsz(w,h);p.w=d.w;p.h=d.h;f.style.width=d.w+'px';f.style.height=d.h+'px'}}
