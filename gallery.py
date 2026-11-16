@@ -284,7 +284,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f{position:relative;cursor:pointer;animation:sw var(--du) ease-in-out var(--de) infinite alternate}
 .f:hover{animation-play-state:paused}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
-.g{position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease,translate .6s cubic-bezier(.22,.8,.25,1)}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
+.g{pointer-events:none;position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease,translate .6s cubic-bezier(.22,.8,.25,1)}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
 .g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}
 .g>.ld{opacity:1}
 .g>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
