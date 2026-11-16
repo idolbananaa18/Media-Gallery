@@ -318,6 +318,7 @@ body.hide header,body.hide #set,body.hide .f>span,body.hide #bar{opacity:0!impor
 <span class="row" id="kinds"></span><span id="cnt"></span><button id="re" title="Rescan folder">Rescan</button><button id="gear">Settings</button><button id="hide" title="Hide controls (H)">Hide</button></div>
 <div class="row tags" id="tags"></div></header>
 <div id="set"><label>Zoom <input id="s_zoom" type="range" min="25" max="150" step="5"></label>
+<label title="Scene size: media stays the same size, gaps grow, and the mouse travels further across it">Spread <input id="s_spread" type="range" min="75" max="400" step="25"></label>
 <label>Sway <select id="s_sway"><option value="0">Off</option><option value="1">Gentle</option><option value="2.5">Strong</option></select></label>
 <label>Theme <select id="s_theme"><option value="dark">Dark</option><option value="black">Black</option><option value="light">Light</option></select></label>
 <label>Accent <input id="s_ac" type="color"></label>
@@ -329,19 +330,19 @@ body.hide header,body.hide #set,body.hide .f>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=1.5))S.zoom=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=1.5))S.zoom=1;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
 function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);
- document.body.classList.toggle('blur',S.blur);$('#s_zoom').value=S.zoom*100;$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+ document.body.classList.toggle('blur',S.blur);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -364,8 +365,8 @@ const TILEH=340;/* every item is this tall; width follows the item's native aspe
 function dsz(w,h){if(!(w>0&&h>0))return{w:TILEH,h:TILEH};return{w:Math.max(1,Math.round(TILEH*w/h)),h:TILEH}}
 function layout(){const z=S.zoom,vw=innerWidth,vh=innerHeight,GAP=44;
  const L=view.map((it,i)=>({i,...dsz(it.w||(it.kind=='video'?16:1),it.h||(it.kind=='video'?9:1))}));pos=new Array(L.length);
- let A=0,mw=0;L.forEach(t=>{A+=(t.w+GAP)*(t.h+GAP);mw=Math.max(mw,t.w)});A*=1.8;
- W=Math.max(vw/z*1.5,Math.sqrt(A*1.6),mw+2*GAP);H=Math.max(vh/z*1.5,A/W);
+ let A=0,mw=0;L.forEach(t=>{A+=(t.w+GAP)*(t.h+GAP);mw=Math.max(mw,t.w)});const K=S.spread;A*=1.8*K*K;
+ W=Math.max(vw/z*1.5*K,Math.sqrt(A*1.6),mw+2*GAP);H=Math.max(vh/z*1.5*K,A/W);
  const R=rng(L.length*7919+1),cell=320,grid=new Map();
  const cells=(x,y,w,h,f)=>{for(let a=Math.floor(x/cell);a<=Math.floor((x+w)/cell);a++)for(let b=Math.floor(y/cell);b<=Math.floor((y+h)/cell);b++)f(a*65537+b)};
  const hit=(x,y,w,h)=>{let bad=false;cells(x-GAP,y-GAP,w+2*GAP,h+2*GAP,k=>{if(bad)return;const l=grid.get(k);if(l)for(const q of l)if(x<q.x+q.w+GAP&&x+w+GAP>q.x&&y<q.y+q.h+GAP&&y+h+GAP>q.y){bad=true;break}});return bad};
