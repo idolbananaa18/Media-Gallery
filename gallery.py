@@ -285,7 +285,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f:hover{animation-play-state:paused}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
 .f>img,.f>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease,transform .4s ease}
-.f>.ld{opacity:1}.f:hover>.ld{transform:scale(1.02)}
+.f>.ld{opacity:1}.f:hover>.ld{transform:scale(var(--hs,1.02))}
 .f>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .f:hover>span{opacity:1}
 .f>.bad::after{content:"Can't play"}
@@ -317,7 +317,8 @@ body.hide header,body.hide #set,body.hide .f>span,body.hide #bar{opacity:0!impor
 <header><div class="row"><input id="q" type="search" placeholder="Search" aria-label="Search">
 <span class="row" id="kinds"></span><span id="cnt"></span><button id="re" title="Rescan folder">Rescan</button><button id="gear">Settings</button><button id="hide" title="Hide controls (H)">Hide</button></div>
 <div class="row tags" id="tags"></div></header>
-<div id="set"><label>Zoom <input id="s_zoom" type="range" min="25" max="150" step="5"></label>
+<div id="set"><label>Zoom <input id="s_zoom" type="range" min="25" max="200" step="5"></label>
+<label title="How much a tile grows when hovered (100% = no growth)">Hover grow <input id="s_hover" type="range" min="100" max="150" step="1"></label>
 <label title="Scene size: media stays the same size, gaps grow, and the mouse travels further across it">Spread <input id="s_spread" type="range" min="75" max="400" step="25"></label>
 <label>Sway <select id="s_sway"><option value="0">Off</option><option value="1">Gentle</option><option value="2.5">Strong</option></select></label>
 <label>Theme <select id="s_theme"><option value="dark">Dark</option><option value="black">Black</option><option value="light">Light</option></select></label>
@@ -330,19 +331,19 @@ body.hide header,body.hide #set,body.hide .f>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,hover:1.02,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=1.5))S.zoom=1;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=1.5))S.hover=1.02;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
-function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);
- document.body.classList.toggle('blur',S.blur);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);r.style.setProperty('--hs',S.hover);
+ document.body.classList.toggle('blur',S.blur);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
