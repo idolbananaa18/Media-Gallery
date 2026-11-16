@@ -284,12 +284,13 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f{position:relative;cursor:pointer;animation:sw var(--du) ease-in-out var(--de) infinite alternate}
 .f:hover{animation-play-state:paused}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
-.f>img,.f>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease,transform .4s ease}
-.f>.ld{opacity:1}.f:hover>.ld{transform:scale(var(--hs,1.02))}
-.f>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
-.f:hover>span{opacity:1}
-.f>.bad::after{content:"Can't play"}
-.blur .f>img,.blur .f>video{filter:blur(26px)}.blur .f:hover>img,.blur .f:hover>video{filter:none}
+.g{position:relative;width:100%;height:100%;transition:transform .4s ease}.f:hover>.g{transform:scale(var(--hs,1.02))}
+.g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}
+.g>.ld{opacity:1}
+.g>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.f:hover .g>span{opacity:1}
+.g>.bad::after{content:"Can't play"}
+.blur .g>img,.blur .g>video{filter:blur(26px)}.blur .f:hover .g>img,.blur .f:hover .g>video{filter:none}
 header,#set,#hint{transition:opacity .35s,transform .35s,visibility 0s}
 header{position:fixed;z-index:5;top:14px;left:20px;right:20px;padding:10px 12px;border-radius:20px;background:color-mix(in srgb,var(--bg) 72%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line)}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row+.row{margin-top:8px}
@@ -302,7 +303,7 @@ header{position:fixed;z-index:5;top:14px;left:20px;right:20px;padding:10px 12px;
 #hint{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--tile);border:1px solid var(--line);border-radius:99px;padding:7px 16px;color:var(--mut);opacity:0;pointer-events:none;z-index:9}#hint.show{opacity:1}
 #dot{display:none;position:fixed;left:10px;top:10px;width:28px;height:28px;padding:0;border-radius:50%;opacity:.12;z-index:9}
 @media(pointer:coarse){body.hide #dot{display:block}}
-body.hide header,body.hide #set,body.hide .f>span,body.hide #bar{opacity:0!important;visibility:hidden;pointer-events:none;transform:translateY(-8px)}
+body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!important;visibility:hidden;pointer-events:none;transform:translateY(-8px)}
 #lb{position:fixed;inset:0;z-index:10;background:#000f;display:grid;grid-template-rows:1fr auto;color:#eee;visibility:hidden;opacity:0;transition:opacity .22s,visibility 0s .22s}
 #lb.open{visibility:visible;opacity:1;transition:opacity .22s}
 #stage{min-height:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;padding:14px}
@@ -377,8 +378,8 @@ function layout(){const z=S.zoom,vw=innerWidth,vh=innerHeight,GAP=44;
   const p={x,y,w:t.w,h:t.h};pos[t.i]=p;cells(x,y,t.w,t.h,k=>{if(!grid.has(k))grid.set(k,[]);grid.get(k).push(p)})});
  world.style.width=W+'px';world.style.height=H+'px'}
 function mk(i){const it=view[i],p=pos[i],h=h32(it.id),m=document.createElement('div');m.className='m';m.dataset.i=i;m.style.transform=`translate3d(${p.x}px,${p.y}px,0)`;
- m.innerHTML=`<div class="f" style="width:${p.w}px;height:${p.h}px;--dx:${h%17-8}px;--dy:${(h>>>5)%17-8}px;--rt:${((h>>>9)%9-4)/10}deg;--du:${9+(h>>>13)%9}s;--de:-${(h>>>3)%10}s">`
- +(it.kind=='video'?`<video src="${it.url}" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div>`;
+ m.innerHTML=`<div class="f" style="width:${p.w}px;height:${p.h}px;--dx:${h%17-8}px;--dy:${(h>>>5)%17-8}px;--rt:${((h>>>9)%9-4)/10}deg;--du:${9+(h>>>13)%9}s;--de:-${(h>>>3)%10}s"><div class="g">`
+ +(it.kind=='video'?`<video src="${it.url}" muted loop playsinline preload="metadata" disablepictureinpicture></video>`:`<img src="${it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
  world.appendChild(m);return m}
 function drop(m){const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load()}m.remove()}
 function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidth+mg)/z,y1=(cy+innerHeight+mg)/z;
