@@ -360,8 +360,10 @@ function render(first){const nv=strip(),em=$('#empty');em.hidden=nv.length>0;
  em.textContent=items.length?'Nothing matches these filters.':'No media yet. Put images, GIFs and videos in '+root+' (subfolders become tags), then press Rescan.';relayout(!first,nv)}
 function relayout(fade,nv){clearTimeout(rt);const go=()=>{if(nv)view=nv;rebuild()};if(fade){world.classList.add('out');rt=setTimeout(()=>{go();world.classList.remove('out')},230)}else go()}
 function rebuild(){live.forEach(drop);live.clear();world.innerHTML='';layout();snap=true;cull()}
+const TILE=340*340;/* target display area; every item keeps its native aspect ratio but is scaled to this area */
+function dsz(w,h){if(!(w>0&&h>0))return{w:340,h:340};const s=Math.sqrt(TILE/(w*h));return{w:Math.max(1,Math.round(w*s)),h:Math.max(1,Math.round(h*s))}}
 function layout(){const z=S.zoom,vw=innerWidth,vh=innerHeight,GAP=44;
- const L=view.map((it,i)=>({i,w:it.w||(it.kind=='video'?480:320),h:it.h||(it.kind=='video'?270:320)}));pos=new Array(L.length);
+ const L=view.map((it,i)=>({i,...dsz(it.w||(it.kind=='video'?16:1),it.h||(it.kind=='video'?9:1))}));pos=new Array(L.length);
  let A=0,mw=0;L.forEach(t=>{A+=(t.w+GAP)*(t.h+GAP);mw=Math.max(mw,t.w)});A*=1.8;
  W=Math.max(vw/z*1.5,Math.sqrt(A*1.6),mw+2*GAP);H=Math.max(vh/z*1.5,A/W);
  const R=rng(L.length*7919+1),cell=320,grid=new Map();
@@ -397,7 +399,7 @@ addEventListener('pointermove',e=>{if(e.target.closest&&e.target.closest('header
  fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));lastMove=performance.now()});
 addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>relayout(true),300)});document.addEventListener('visibilitychange',sync);
 function fit(m){const f=m.closest('.f');if(!f)return;const i=+f.parentNode.dataset.i,it=view[i],p=pos[i],w=m.naturalWidth||m.videoWidth,h=m.naturalHeight||m.videoHeight;
- if(it&&p&&w&&h&&(p.w!=w||p.h!=h)){p.w=it.w=w;p.h=it.h=h;f.style.width=w+'px';f.style.height=h+'px'}}
+ if(it&&p&&w&&h&&(it.w!=w||it.h!=h)){it.w=w;it.h=h;const d=dsz(w,h);p.w=d.w;p.h=d.h;f.style.width=d.w+'px';f.style.height=d.h+'px'}}
 ['load','loadeddata','loadedmetadata'].forEach(ev=>world.addEventListener(ev,e=>{e.target.classList.add('ld');fit(e.target);if(e.target.tagName=='VIDEO')sync()},true));
 world.addEventListener('error',e=>e.target.classList?.add('bad'),true);
 world.addEventListener('mouseenter',e=>{if(S.preview!='hover'||cur>=0||!e.target.classList?.contains('m'))return;const v=e.target.querySelector('video');if(v){v.muted=true;v.play().catch(()=>{})}},true);
