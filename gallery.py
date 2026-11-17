@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local media gallery. Run: python3 gallery.py [--media DIR] [--port N]
 Serves on 127.0.0.1 only. Stdlib only; UI is embedded below."""
-import argparse, hashlib, json, os, shutil, subprocess, sys, re, struct, threading, time
+import argparse, collections, hashlib, json, os, shutil, subprocess, sys, re, struct, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote, quote
@@ -27,6 +27,8 @@ THUMB_GATE = threading.Semaphore(2)   # decode at most 2 big photos at once so t
 USE_THUMBS = Image is not None
 FFMPEG = shutil.which("ffmpeg")      # optional: with ffmpeg, every video gets a cached 640px poster frame so the wall needs no <video> per tile
 POSTER_GATE = threading.Semaphore(2)
+USE_FF = FFMPEG is not None          # video posters + previews need only ffmpeg (NOT Pillow)
+PV_Q, PV_SET, PV_FAIL, PV_CV, PV_THREAD = collections.deque(), set(), set(), threading.Condition(), None
 INDEX, CACHE, VID = {}, {}, {}
 CHUNK = 2_000_000  # max bytes per range response: frees sockets so many videos can stream at once
 CODECS = {b"avc1": "H.264", b"hvc1": "H.265/HEVC", b"hev1": "H.265/HEVC", b"av01": "AV1", b"vp09": "VP9",
@@ -144,7 +146,7 @@ def thumb_path(p, st):
 
 def poster_path(p, st):
     """Cached poster JPEG for video p (made with ffmpeg), or None if unavailable."""
-    if not (FFMPEG and USE_THUMBS): return None
+    if not USE_FF: return None
     out = THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}|poster".encode()).hexdigest()[:24] + ".v.jpg")
     if out.is_file(): return out
     with POSTER_GATE:
@@ -163,6 +165,58 @@ def poster_path(p, st):
         try: tmp.unlink()
         except OSError: pass
         return None
+
+
+def preview_file(p, st):
+    return THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}|preview".encode()).hexdigest()[:24] + ".w.mp4")
+
+
+def make_preview(p, st):
+    """Small 480p, audio-less, first-10s copy of video p for the wall (the lightbox still plays the original). None on failure."""
+    out = preview_file(p, st)
+    if out.is_file(): return out
+    THUMB_DIR.mkdir(exist_ok=True)
+    tmp = out.with_name(out.stem + ".tmp.mp4")
+    kw = {"creationflags": 0x00004000} if os.name == "nt" else {"preexec_fn": lambda: os.nice(10)}   # run below normal priority
+    try:
+        r = subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(p), "-map", "0:v:0", "-t", "10", "-vf", "scale=-2:'min(480,ih)'",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", str(tmp)],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=600, **kw)
+        ok = r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0
+    except Exception:
+        ok = False
+    if ok:
+        os.replace(tmp, out); return out
+    try: tmp.unlink()
+    except OSError: pass
+    return None
+
+
+def pv_worker():
+    while True:
+        with PV_CV:
+            while not PV_Q: PV_CV.wait()
+            p = PV_Q.popleft()
+        try:
+            if not make_preview(p, p.stat()): PV_FAIL.add(p)
+        except Exception:
+            PV_FAIL.add(p)
+        finally:
+            with PV_CV: PV_SET.discard(p)
+
+
+def pv_enqueue(p, front=False):
+    """Queue a background preview job (one worker, low priority). front=True: someone is waiting on it right now."""
+    global PV_THREAD
+    if not USE_FF or p in PV_FAIL: return
+    with PV_CV:
+        if p in PV_SET:
+            if front and p in PV_Q: PV_Q.remove(p); PV_Q.appendleft(p)
+            return
+        PV_SET.add(p); (PV_Q.appendleft if front else PV_Q.append)(p)
+        if PV_THREAD is None or not PV_THREAD.is_alive():
+            PV_THREAD = threading.Thread(target=pv_worker, daemon=True); PV_THREAD.start()
+        PV_CV.notify()
 
 
 def norm(t):
@@ -219,8 +273,9 @@ def scan():
             url = "/f/" + quote(rel)
             if k == "video":  # extension-less URL + neutral type so download managers don't treat it as a video
                 h = hashlib.sha1(rel.encode()).hexdigest()[:16]; vids[h] = rel; url = "/v/" + h
+            if k == "video" and USE_FF and not preview_file(p, st).is_file(): pv_enqueue(p)
             th = "/t/" + quote(rel) if USE_THUMBS and k == "image" and ext in THUMB_EXT and wh and max(wh) > THUMB_MAX else None
-            it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "th": th, "po": ("/p/" + h) if k == "video" and FFMPEG and USE_THUMBS else None, "w": wh[0] if wh else 0,
+            it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "th": th, "po": ("/p/" + h) if k == "video" and USE_FF else None, "pv": ("/w/" + h) if k == "video" and USE_FF else None, "w": wh[0] if wh else 0,
                   "h": wh[1] if wh else 0, "mtime": int(st.st_mtime), "size": st.st_size,
                   "auto": auto_tags(rel, k, wh, st.st_mtime)}
             items.append(it)
@@ -281,6 +336,15 @@ class H(BaseHTTPRequestHandler):
             with LOCK: rel = VID.get(path[3:])
             return self.file(safe(rel) if rel else None, True)
         if path.startswith("/f/"): return self.file(safe(unquote(path[3:])))
+        if path.startswith("/w/"):   # wall preview: the cached 480p copy if ready, else the original (and make the copy in the background)
+            with LOCK: rel = VID.get(path[3:])
+            p = safe(rel) if rel else None
+            if not p: return self.file(None)
+            try: out = preview_file(p, p.stat())
+            except OSError: return self.file(None)
+            if out.is_file(): return self.file(out, True)
+            pv_enqueue(p, front=True)
+            return self.send(302, b"", extra=[("Location", "/v/" + path[3:]), ("Cache-Control", "no-store")])
         if path.startswith("/p/"):
             with LOCK: rel = VID.get(path[3:])
             p = safe(rel) if rel else None
@@ -473,7 +537,7 @@ function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidt
  lc={x:cx,y:cy};sync()}
 /* Video tiles show a cheap poster <img>; a real <video> exists only on the few tiles that are playing (<= cap) and is removed afterwards. */
 function startVid(m){const it=view[+m.dataset.i];if(!it||m._vbad)return;let v=m.querySelector('video');
- if(!v){v=document.createElement('video');v.muted=true;v.loop=true;v.playsInline=true;v.disablePictureInPicture=true;v.preload='auto';v.src=it.url;
+ if(!v){v=document.createElement('video');v.muted=true;v.loop=true;v.playsInline=true;v.disablePictureInPicture=true;v.preload='auto';v.src=it.pv||it.url;
   const g=m.querySelector('.g');g.insertBefore(v,g.querySelector('span'))}
  if(v.paused)v.play().catch(()=>{})}
 function stopVid(m){const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load();v.remove()}}
@@ -506,12 +570,13 @@ let last=0;function frame(t){requestAnimationFrame(frame);const dt=Math.min(100,
 addEventListener('pointermove',e=>{if(e.target.closest&&e.target.closest('header,#set,#lb'))return;
  fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));ptr.x=e.clientX;ptr.y=e.clientY;ptr.has=true;vdirty=true;lastMove=performance.now()});
 addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>relayout(true),300)});document.addEventListener('visibilitychange',sync);
-function fit(m){const f=m.closest('.f');if(!f)return;const i=+f.parentNode.dataset.i,it=view[i],p=pos[i];if(m.classList.contains('po')&&it&&it.w&&it.h)return;const w=m.naturalWidth||m.videoWidth,h=m.naturalHeight||m.videoHeight;
+function fit(m){const f=m.closest('.f');if(!f)return;const i=+f.parentNode.dataset.i,it=view[i],p=pos[i];if((m.classList.contains('po')||m.tagName=='VIDEO')&&it&&it.w&&it.h)return;const w=m.naturalWidth||m.videoWidth,h=m.naturalHeight||m.videoHeight;
  if(it&&p&&w&&h&&(it.w!=w||it.h!=h)){it.w=w;it.h=h;const d=dsz(w,h);p.w=d.w;p.h=d.h;f.style.width=d.w+'px';f.style.height=d.h+'px'}}
 ['load','loadeddata','loadedmetadata'].forEach(ev=>world.addEventListener(ev,e=>{e.target.classList.add('ld');fit(e.target)},true));
 world.addEventListener('error',e=>{const t=e.target,m=t.closest&&t.closest('.m');if(!m)return;
  if(t.classList.contains('po')){t.removeAttribute('src');if(!m._pf){m._pf=1;wantPoster(m)}}   /* server poster missing -> capture in the browser */
- else if(t.tagName=='VIDEO'){m._vbad=1;stopVid(m)}else t.classList.add('bad')},true);
+ else if(t.tagName=='VIDEO'){const it=view[+m.dataset.i];if(it&&it.pv&&!m._pvf&&t.getAttribute('src')!=it.url){m._pvf=1;t.src=it.url;t.play().catch(()=>{});return}   /* preview failed -> original */
+  m._vbad=1;stopVid(m)}else t.classList.add('bad')},true);
 world.addEventListener('mouseenter',e=>{if(S.preview!='hover'||cur>=0||!e.target.classList?.contains('m'))return;e.target._hv=1;if(view[+e.target.dataset.i]?.kind=='video')startVid(e.target)},true);
 world.addEventListener('mouseleave',e=>{if(S.preview=='hover'&&e.target.classList?.contains('m')){e.target._hv=0;stopVid(e.target)}},true);
 world.onclick=e=>{const m=e.target.closest('.m');if(m)open(+m.dataset.i)};
@@ -595,11 +660,13 @@ def main():
     ap.add_argument("--media", default=str(HERE / "media")); ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-thumbs", action="store_true", help="don't generate wall thumbnails/posters (default: on when Pillow / ffmpeg are available)")
     a = ap.parse_args()
-    global USE_THUMBS
-    if a.no_thumbs: USE_THUMBS = False
+    global USE_THUMBS, USE_FF
+    if a.no_thumbs: USE_THUMBS = USE_FF = False
     ROOT = Path(a.media).expanduser().resolve(); ROOT.mkdir(parents=True, exist_ok=True)
     srv = Srv(("127.0.0.1", a.port), H)
     print(f"Gallery: http://127.0.0.1:{a.port}  (media: {ROOT})")
+    print(f"  photo thumbnails (Pillow):               {'ON' if USE_THUMBS else 'off  (pip install pillow for smoother photo walls)'}")
+    print(f"  video posters + 480p previews (ffmpeg):  {'ON' if USE_FF else 'off  (install ffmpeg for much smoother video walls)'}")
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
 
