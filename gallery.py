@@ -457,7 +457,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f{position:relative;cursor:pointer;animation:sw var(--du) ease-in-out var(--de) infinite alternate}
 .f:hover{animation-play-state:paused}.nosway .f{animation:none}.noshadow .g>img,.noshadow .g>video{box-shadow:none}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
-.g{pointer-events:none;position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease,translate .6s cubic-bezier(.22,.8,.25,1)}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
+.g{pointer-events:none;position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
 .g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}.g>video{position:absolute;inset:0;box-shadow:none;transition:opacity .15s linear}
 .g>.ld{opacity:1}
 .g>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
@@ -500,10 +500,11 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <label>Blur until hover <input id="s_blur" type="checkbox"></label>
 <label>Show names <input id="s_labels" type="checkbox"></label>
 <label title="Soft shadow under each tile. Turning it off makes big walls noticeably smoother">Shadows <input id="s_shadows" type="checkbox"></label>
-<label title="On hover, the tile slides toward the centre of your screen. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
+<label title="On hover, the tile slides toward the centre of your screen and stays there as the wall moves. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
 <label title="Which videos play (when limited by the playing cap): those nearest the centre of the screen (0%) or nearest your mouse (100%)">Video focus <input id="s_vf" type="range" min="0" max="100" step="10"></label>
 <label title="Sharpness of videos while they play on the wall. Original = the file itself (sharpest, heaviest); 720p / 480p = smaller cached copies made by ffmpeg (smoother). The lightbox always plays the original.">Wall video quality <select id="s_vq"><option value="orig">Original (sharpest)</option><option value="720">High (720p)</option><option value="480">Fast (480p)</option></select></label>
 <div id="pvst" hidden style="font-size:12px;opacity:.7;margin:-4px 0 6px"></div>
+<label title="Volume of the video you hover over; it fades in and out. 0 = off. Needs Wall video quality = Original (the smaller copies have no audio), and a click on the page once so the browser allows sound.">Hover sound <input id="s_snd" type="range" min="0" max="100" step="5"></label>
 <label>Video previews <select id="s_prev"><option value="all">Play in view</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
 <label>Playing at once <select id="s_cap"><option>3</option><option>6</option><option>10</option><option>16</option><option>30</option></select></label>
 <button id="s_bench" title="Sweeps the wall quickly under ~10 different configurations and shows which one costs you the most frame rate. Takes about 45 seconds; your settings are not changed.">Run speed test…</button></div>
@@ -512,19 +513,19 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,hover:1.02,pull:0,wq:'orig',shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,hover:1.02,pull:0,snd:.5,wq:'orig',shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!['orig','720','480'].includes(S.wq))S.wq='orig';if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!['orig','720','480'].includes(S.wq))S.wq='orig';if(!(S.snd>=0&&S.snd<=1))S.snd=.5;if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
 function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);r.style.setProperty('--hs',S.hover);
- document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vq').value=S.wq;$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+ document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_snd').value=Math.round(S.snd*100);$('#s_vq').value=S.wq;$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vq','change',t=>{set('wq',t.value);live.forEach(m=>stopVid(m));sync();setTimeout(pvPoll,600)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>set('pull',t.value/100));bind('#s_snd','input',t=>{set('snd',t.value/100);if(hov){if(S.snd)hoverSound(hov);else fadeOut(hov)}});bind('#s_vq','change',t=>{set('wq',t.value);live.forEach(m=>stopVid(m));sync();setTimeout(pvPoll,600)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -562,15 +563,28 @@ function mk(i){const it=view[i],p=pos[i],h=h32(it.id),m=document.createElement('
  +(it.kind=='video'?`<img class="po"${it.po?` src="${it.po}"`:''} decoding="async" alt="">`:`<img src="${it.th||it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
  world.appendChild(m);if(it.kind=='video')wantPoster(m);return m}
 let hov=null;const ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0,lastStart=0,pspd=0,calm=0,ppx=0,ppy=0,needSettle=false;const FAST=600,PACE=180;/* while the POINTER moves faster than FAST px/s, at most one NEW video starts per PACE ms */
-/* Hover pull: the target is captured ONCE when the pointer enters a tile (where the screen centre is at that moment) and then stays fixed,
-   so the tile glides there and stays put, even if the wall pans afterwards. The unmoved .f remains the hover hitbox; only .g moves. */
-function pullTo(m){const f=m.firstChild,p=pos[+m.dataset.i];if(!f||!p)return;const z=S.zoom,k=cur<0?S.pull:0;
- const dx=k?Math.round((innerWidth/2-((p.x+p.w/2)*z-cx))*k/z):0,dy=k?Math.round((innerHeight/2-((p.y+p.h/2)*z-cy))*k/z):0;
- f.style.setProperty('--hx',dx+'px');f.style.setProperty('--hy',dy+'px')}
-function unpull(m){const f=m&&m.firstChild;if(f){f.style.removeProperty('--hx');f.style.removeProperty('--hy')}}
-world.addEventListener('mouseover',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m!==hov){unpull(hov);hov=m;pullTo(m)}});
-world.addEventListener('mouseout',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m===hov&&!(e.relatedTarget&&m.contains(e.relatedTarget))){unpull(m);hov=null}});
-function drop(m){if(m===hov)hov=null;stopVid(m);m.remove()}
+/* Hover pull: while a tile is hovered its visual (.g) is eased toward where the screen centre is RIGHT NOW (so it follows the camera as the wall pans);
+   the unmoved .f stays the only hover hitbox (.g has pointer-events:none). Offsets are eased in JS each frame (see frame()); a tile that is no longer hovered eases back to 0. */
+const pulls=new Map();
+function pullTo(m){if(!pulls.has(m))pulls.set(m,{x:0,y:0})}
+function unpull(m){}
+/* Hover sound: the hovered tile's video fades its volume up (and back down on leave); the wall's videos are muted otherwise. */
+const fades=new Map(),FADE_UP=800,FADE_DOWN=350;
+function flash(msg){const h=$('#hint');if(!h)return;const o=h.textContent;h.textContent=msg;h.classList.add('show');setTimeout(()=>{h.classList.remove('show');h.textContent=o},3500)}
+function hoverSound(m){const it=view[+m.dataset.i];if(!it||it.kind!='video'||S.preview=='off'||!S.snd||cur>=0)return;
+ if(S.wq!='orig'&&it.pv)return;                       /* the 720p/480p wall copies carry no audio */
+ if(navigator.userActivation&&!navigator.userActivation.hasBeenActive){if(!hoverSound.told){hoverSound.told=1;flash('Click anywhere once to allow hover sound')}return}
+ m._snd=1;startVid(m);const v=m.querySelector('video');if(v)fades.set(m,{v,to:S.snd,from:performance.now()+150})}
+function fadeOut(m){m._snd=0;const o=fades.get(m);if(o)o.to=0}
+function stepFades(dt){fades.forEach((o,m)=>{const v=o.v;if(!v.isConnected){fades.delete(m);return}
+  const to=cur>=0?0:o.to;if(performance.now()<o.from&&to>0)return;
+  if(to>0&&v.muted){v.volume=0;v.muted=false;if(v.paused)v.play().catch(()=>{v.muted=true})}
+  const d=to>v.volume?dt/FADE_UP*S.snd:-dt/FADE_DOWN*Math.max(S.snd,.2);let nv=v.volume+d;if(d>0)nv=Math.min(to,nv);else nv=Math.max(to,nv);
+  try{v.volume=Math.max(0,Math.min(1,nv))}catch{}
+  if(to==0&&v.volume<=.001){v.muted=true;fades.delete(m)}})}
+world.addEventListener('mouseover',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m!==hov){if(hov)fadeOut(hov);hov=m;pullTo(m);hoverSound(m)}});
+world.addEventListener('mouseout',e=>{const m=e.target.closest&&e.target.closest('.m');if(m&&m===hov&&!(e.relatedTarget&&m.contains(e.relatedTarget))){fadeOut(m);hov=null}});
+function drop(m){if(m===hov)hov=null;pulls.delete(m);fades.delete(m);stopVid(m);m.remove()}
 function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidth+mg)/z,y1=(cy+innerHeight+mg)/z;
  for(let i=0;i<pos.length;i++){const p=pos[i],v=p.x<x1&&p.x+p.w>x0&&p.y<y1&&p.y+p.h>y0;
   if(v&&!live.has(i))live.set(i,mk(i));else if(!v&&live.has(i)){drop(live.get(i));live.delete(i)}}
@@ -599,13 +613,19 @@ function sync(){vdirty=false;lastSync=performance.now();const z=S.zoom,on=S.prev
   if(pspd>FAST){needSettle=true;const now=performance.now();let fresh=0;   /* moving fast: keep what plays; add new videos one at a time (nearest first) - bursts of decoder creation are what stutter */
    vs.forEach((o,k)=>{if(k<S.cap+2&&o.m.querySelector('video'))sel.add(o.m);else if(k<S.cap&&!fresh&&now-lastStart>=PACE){fresh=1;lastStart=now;sel.add(o.m)}})}
   else vs.forEach((o,k)=>{if(k<S.cap||k<S.cap+2&&o.m.querySelector('video'))sel.add(o.m)})}
- live.forEach((m,i)=>{if(view[i].kind!='video')return;if(sel.has(m)||S.preview=='hover'&&cur<0&&m._hv)startVid(m);else stopVid(m)})}
+ live.forEach((m,i)=>{if(view[i].kind!='video')return;if(sel.has(m)||m._snd||S.preview=='hover'&&cur<0&&m._hv)startVid(m);else stopVid(m)})}
 let last=0;function frame(t){requestAnimationFrame(frame);const dt=Math.min(100,t-last||16);last=t;if(!W)return;
  const z=S.zoom,vw=innerWidth,vh=innerHeight,Ws=W*z,Hs=H*z;let a=fx,b=fy;
  if(t-lastMove>7000){a=.5+.4*Math.sin(t/23000);b=.5+.4*Math.cos(t/31000)}
  tx=Ws>vw?a*(Ws-vw):(Ws-vw)/2;ty=Hs>vh?b*(Hs-vh):(Hs-vh)/2;
  if(snap){cx=tx;cy=ty;snap=false}else{const k=1-Math.exp(-dt/280);cx+=(tx-cx)*k;cy+=(ty-cy)*k}
  pspd+=(Math.hypot(ptr.x-ppx,ptr.y-ppy)/dt*1000-pspd)*.4;ppx=ptr.x;ppy=ptr.y;calm=pspd<FAST?calm+dt:0;if(needSettle&&calm>50){needSettle=false;sync()}
+ if(pulls.size){const kk=1-Math.exp(-dt/200);pulls.forEach((o,m)=>{let gx=0,gy=0;const p=pos[+m.dataset.i];
+   if(m===hov&&cur<0&&S.pull&&p){gx=(vw/2-((p.x+p.w/2)*z-cx))*S.pull/z;gy=(vh/2-((p.y+p.h/2)*z-cy))*S.pull/z}
+   o.x+=(gx-o.x)*kk;o.y+=(gy-o.y)*kk;const f=m.firstChild;if(!f){pulls.delete(m);return}
+   if(m!==hov&&Math.abs(o.x)+Math.abs(o.y)<.4){f.style.removeProperty('--hx');f.style.removeProperty('--hy');pulls.delete(m)}
+   else{const sx=o.x.toFixed(1)+'px',sy=o.y.toFixed(1)+'px';if(sx!=o.sx||sy!=o.sy){o.sx=sx;o.sy=sy;f.style.setProperty('--hx',sx);f.style.setProperty('--hy',sy)}}})}
+ if(fades.size)stepFades(dt);
  world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;if(vdirty&&S.vfocus>0&&t-lastSync>120)sync();if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
 addEventListener('pointermove',e=>{if(e.target.closest&&e.target.closest('header,#set,#lb'))return;
  fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));ptr.x=e.clientX;ptr.y=e.clientY;ptr.has=true;vdirty=true;lastMove=performance.now()});
