@@ -28,9 +28,10 @@ USE_THUMBS = Image is not None
 FFMPEG = shutil.which("ffmpeg")      # optional: with ffmpeg, every video gets a cached 640px poster frame so the wall needs no <video> per tile
 POSTER_GATE = threading.Semaphore(2)
 USE_FF = FFMPEG is not None          # video posters + previews need only ffmpeg (NOT Pillow)
-PV_QUALITY = {"480": (480, "26", "veryfast"), "720": (720, "21", "fast")}   # label -> (max height, x264 crf, preset); lower crf = sharper
+PV_QUALITY = {"480": (480, "26", "veryfast"), "720": (720, "21", "veryfast")}   # label -> (max height, x264 crf, preset); lower crf = sharper
 PV_DEFAULT = PV_TARGET = "720"       # PV_TARGET: the quality the browser last asked for; the background worker prepares that one for the whole library
-PV_Q, PV_SET, PV_FAIL, PV_CV, PV_THREAD = collections.deque(), set(), set(), threading.Condition(), None
+PV_Q, PV_SET, PV_FAIL, PV_CV, PV_THREADS = collections.deque(), set(), set(), threading.Condition(), []
+PV_WORKERS = max(1, min(3, (os.cpu_count() or 2) // 4))   # parallel ffmpeg jobs (each one is already multi-threaded, so few are enough)
 INDEX, CACHE, VID = {}, {}, {}
 CHUNK = 2_000_000  # max bytes per range response: frees sockets so many videos can stream at once
 CODECS = {b"avc1": "H.264", b"hvc1": "H.265/HEVC", b"hev1": "H.265/HEVC", b"av01": "AV1", b"vp09": "VP9",
@@ -209,8 +210,7 @@ def pv_worker():
 
 
 def pv_enqueue(p, q, front=False):
-    """Queue a background preview job (one worker, low priority). front=True: someone is waiting on it right now."""
-    global PV_THREAD
+    """Queue a background preview job (a few workers, low priority). front=True: someone is waiting on it right now."""
     if not USE_FF or (p, q) in PV_FAIL: return
     job = (p, q)
     with PV_CV:
@@ -218,9 +218,22 @@ def pv_enqueue(p, q, front=False):
             if front and job in PV_Q: PV_Q.remove(job); PV_Q.appendleft(job)
             return
         PV_SET.add(job); (PV_Q.appendleft if front else PV_Q.append)(job)
-        if PV_THREAD is None or not PV_THREAD.is_alive():
-            PV_THREAD = threading.Thread(target=pv_worker, daemon=True); PV_THREAD.start()
+        PV_THREADS[:] = [t for t in PV_THREADS if t.is_alive()]
+        while len(PV_THREADS) < PV_WORKERS:
+            t = threading.Thread(target=pv_worker, daemon=True); t.start(); PV_THREADS.append(t)
         PV_CV.notify()
+
+
+def pv_status():
+    """How many wall copies of the target quality exist, out of how many videos."""
+    with LOCK: rels = list(VID.values())
+    n = 0
+    for rel in rels:
+        p = safe(rel)
+        try:
+            if p and (preview_file(p, p.stat(), PV_TARGET).is_file() or (p, PV_TARGET) in PV_FAIL): n += 1
+        except OSError: pass
+    return {"on": bool(USE_FF), "q": PV_TARGET, "ready": n, "total": len(rels)}
 
 
 def pv_target(q):
@@ -346,6 +359,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/": return self.send(200, PAGE.encode(), "text/html; charset=utf-8", [("Cache-Control", "no-store")])
         if path == "/api/items":
             return self.send(200, json.dumps({"root": str(ROOT), "items": scan()}).encode(), "application/json", [("Cache-Control", "no-store")])
+        if path == "/api/pv": return self.send(200, json.dumps(pv_status()).encode(), "application/json", [("Cache-Control", "no-store")])
         if path == "/api/codec":
             p = safe(parse_qs(urlparse(self.path).query).get("id", [""])[0])
             return self.send(200, json.dumps({"codec": codec(p) if p else None}).encode(), "application/json")
@@ -485,6 +499,7 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <label title="On hover, the tile slides toward the centre of your screen. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
 <label title="Which videos play (when limited by the playing cap): those nearest the centre of the screen (0%) or nearest your mouse (100%)">Video focus <input id="s_vf" type="range" min="0" max="100" step="10"></label>
 <label title="Sharpness of videos while they play on the wall. Original = the file itself (sharpest, heaviest); 720p / 480p = smaller cached copies made by ffmpeg (smoother). The lightbox always plays the original.">Wall video quality <select id="s_vq"><option value="orig">Original (sharpest)</option><option value="720">High (720p)</option><option value="480">Fast (480p)</option></select></label>
+<div id="pvst" hidden style="font-size:12px;opacity:.7;margin:-4px 0 6px"></div>
 <label>Video previews <select id="s_prev"><option value="all">Play in view</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
 <label>Playing at once <select id="s_cap"><option>3</option><option>6</option><option>10</option><option>16</option><option>30</option></select></label>
 <button id="s_bench" title="Sweeps the wall quickly under ~10 different configurations and shows which one costs you the most frame rate. Takes about 45 seconds; your settings are not changed.">Run speed test…</button></div>
@@ -505,7 +520,7 @@ function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.sty
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vq','change',t=>{set('vq',t.value);live.forEach(m=>stopVid(m));sync()});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vq','change',t=>{set('vq',t.value);live.forEach(m=>stopVid(m));sync();setTimeout(pvPoll,600)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -626,7 +641,8 @@ function probe(it){return new Promise(ok=>{const v=it.kind=='video',e=document.c
  if(v)e.preload='metadata';e.src=it.url})}
 async function measure(list){const q=list.filter(i=>!(i.w>0&&i.h>0));let n=0;
  await Promise.race([Promise.all(Array.from({length:Math.min(8,q.length)},async()=>{while(n<q.length)await probe(q[n++])})),new Promise(r=>setTimeout(r,6000))])}
-async function load(){try{const r=await fetch('/api/items');const d=await r.json();items=d.items;root=d.root;await measure(items)}catch{items=[];root='the media folder'}render(!W)}
+let pvT=0;async function pvPoll(){clearTimeout(pvT);const e=$('#pvst');try{const d=await (await fetch('/api/pv')).json();if(!d.on||S.vq=='orig'||d.ready>=d.total){e.hidden=true;if(d.on&&S.vq!='orig'&&d.ready>=d.total&&pvPoll.busy){pvPoll.busy=0;live.forEach(m=>stopVid(m));sync()}return}pvPoll.busy=1;e.hidden=false;e.textContent='Preparing '+(d.q=='720'?'720p':'480p')+' copies: '+d.ready+' / '+d.total+' (videos play from the originals until ready)';pvT=setTimeout(pvPoll,2500)}catch{}}
+async function load(){try{const r=await fetch('/api/items');const d=await r.json();items=d.items;root=d.root;await measure(items)}catch{items=[];root='the media folder'}render(!W);setTimeout(pvPoll,1500)}
 /* ---- Speed test: scripted fast sweeps under different configurations, so the real cost on THIS machine can be read off a table ---- */
 const BCSS={blur:'*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}',corners:'.g>img,.g>video,.g>span{border-radius:0!important}',
  anim:'.f,.g,.g>img,.g>video{animation:none!important;transition:none!important}',media:'.g>img,.g>video{visibility:hidden!important}',quarter:'.m:not(:nth-child(4n+1)){display:none!important}',
