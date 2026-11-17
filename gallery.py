@@ -29,7 +29,7 @@ FFMPEG = shutil.which("ffmpeg")      # optional: with ffmpeg, every video gets a
 POSTER_GATE = threading.Semaphore(2)
 USE_FF = FFMPEG is not None          # video posters + previews need only ffmpeg (NOT Pillow)
 PV_QUALITY = {"480": (480, "26", "veryfast"), "720": (720, "21", "veryfast")}   # label -> (max height, x264 crf, preset); lower crf = sharper
-PV_DEFAULT = PV_TARGET = "720"       # PV_TARGET: the quality the browser last asked for; the background worker prepares that one for the whole library
+PV_DEFAULT, PV_TARGET = "720", None   # PV_TARGET: the copy quality the browser last asked for (None = Original, nothing is generated); the background worker prepares that one for the whole library
 PV_Q, PV_SET, PV_FAIL, PV_CV, PV_THREADS = collections.deque(), set(), set(), threading.Condition(), []
 PV_WORKERS = max(1, min(3, (os.cpu_count() or 2) // 4))   # parallel ffmpeg jobs (each one is already multi-threaded, so few are enough)
 INDEX, CACHE, VID = {}, {}, {}
@@ -303,7 +303,7 @@ def scan():
             url = "/f/" + quote(rel)
             if k == "video":  # extension-less URL + neutral type so download managers don't treat it as a video
                 h = hashlib.sha1(rel.encode()).hexdigest()[:16]; vids[h] = rel; url = "/v/" + h
-            if k == "video" and USE_FF and not preview_file(p, st, PV_TARGET).is_file(): pv_enqueue(p, PV_TARGET)
+            if k == "video" and USE_FF and PV_TARGET and not preview_file(p, st, PV_TARGET).is_file(): pv_enqueue(p, PV_TARGET)
             th = "/t/" + quote(rel) if USE_THUMBS and k == "image" and ext in THUMB_EXT and wh and max(wh) > THUMB_MAX else None
             it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "th": th, "po": ("/p/" + h) if k == "video" and USE_FF else None, "pv": ("/w/" + h) if k == "video" and USE_FF else None, "w": wh[0] if wh else 0,
                   "h": wh[1] if wh else 0, "mtime": int(st.st_mtime), "size": st.st_size,
@@ -359,7 +359,11 @@ class H(BaseHTTPRequestHandler):
         if path == "/": return self.send(200, PAGE.encode(), "text/html; charset=utf-8", [("Cache-Control", "no-store")])
         if path == "/api/items":
             return self.send(200, json.dumps({"root": str(ROOT), "items": scan()}).encode(), "application/json", [("Cache-Control", "no-store")])
-        if path == "/api/pv": return self.send(200, json.dumps(pv_status()).encode(), "application/json", [("Cache-Control", "no-store")])
+        if path == "/api/pv":
+            q = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+            if q in PV_QUALITY: pv_target(q)
+            if not PV_TARGET: return self.send(200, b'{"on":false}', "application/json", [("Cache-Control", "no-store")])
+            return self.send(200, json.dumps(pv_status()).encode(), "application/json", [("Cache-Control", "no-store")])
         if path == "/api/codec":
             p = safe(parse_qs(urlparse(self.path).query).get("id", [""])[0])
             return self.send(200, json.dumps({"codec": codec(p) if p else None}).encode(), "application/json")
@@ -508,19 +512,19 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,hover:1.02,pull:0,vq:'720',shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,hover:1.02,pull:0,wq:'orig',shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!['orig','720','480'].includes(S.vq))S.vq='720';if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!['orig','720','480'].includes(S.wq))S.wq='orig';if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
 function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);r.style.setProperty('--hs',S.hover);
- document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vq').value=S.vq;$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+ document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vq').value=S.wq;$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vq','change',t=>{set('vq',t.value);live.forEach(m=>stopVid(m));sync();setTimeout(pvPoll,600)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vq','change',t=>{set('wq',t.value);live.forEach(m=>stopVid(m));sync();setTimeout(pvPoll,600)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -573,7 +577,7 @@ function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidt
  lc={x:cx,y:cy};sync()}
 /* Video tiles show a cheap poster <img>; a real <video> exists only on the few tiles that are playing (<= cap) and is removed afterwards. */
 function startVid(m){const it=view[+m.dataset.i];if(!it||m._vbad)return;let v=m.querySelector('video');
- if(!v){v=document.createElement('video');v.muted=true;v.loop=true;v.playsInline=true;v.disablePictureInPicture=true;v.preload='auto';v.src=S.vq=='orig'||!it.pv?it.url:it.pv+'?q='+S.vq;
+ if(!v){v=document.createElement('video');v.muted=true;v.loop=true;v.playsInline=true;v.disablePictureInPicture=true;v.preload='auto';v.src=S.wq=='orig'||!it.pv?it.url:it.pv+'?q='+S.wq;
   const g=m.querySelector('.g');g.insertBefore(v,g.querySelector('span'))}
  if(v.paused)v.play().catch(()=>{})}
 function stopVid(m){const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load();v.remove()}}
@@ -641,7 +645,7 @@ function probe(it){return new Promise(ok=>{const v=it.kind=='video',e=document.c
  if(v)e.preload='metadata';e.src=it.url})}
 async function measure(list){const q=list.filter(i=>!(i.w>0&&i.h>0));let n=0;
  await Promise.race([Promise.all(Array.from({length:Math.min(8,q.length)},async()=>{while(n<q.length)await probe(q[n++])})),new Promise(r=>setTimeout(r,6000))])}
-let pvT=0;async function pvPoll(){clearTimeout(pvT);const e=$('#pvst');try{const d=await (await fetch('/api/pv')).json();if(!d.on||S.vq=='orig'||d.ready>=d.total){e.hidden=true;if(d.on&&S.vq!='orig'&&d.ready>=d.total&&pvPoll.busy){pvPoll.busy=0;live.forEach(m=>stopVid(m));sync()}return}pvPoll.busy=1;e.hidden=false;e.textContent='Preparing '+(d.q=='720'?'720p':'480p')+' copies: '+d.ready+' / '+d.total+' (videos play from the originals until ready)';pvT=setTimeout(pvPoll,2500)}catch{}}
+let pvT=0;async function pvPoll(){clearTimeout(pvT);const e=$('#pvst');try{if(S.wq=='orig'){e.hidden=true;return}const d=await (await fetch('/api/pv?q='+S.wq)).json();if(!d.on||S.wq=='orig'||d.ready>=d.total){e.hidden=true;if(d.on&&S.wq!='orig'&&d.ready>=d.total&&pvPoll.busy){pvPoll.busy=0;live.forEach(m=>stopVid(m));sync()}return}pvPoll.busy=1;e.hidden=false;e.textContent='Preparing '+(d.q=='720'?'720p':'480p')+' copies: '+d.ready+' / '+d.total+' (videos play from the originals until ready)';pvT=setTimeout(pvPoll,2500)}catch{}}
 async function load(){try{const r=await fetch('/api/items');const d=await r.json();items=d.items;root=d.root;await measure(items)}catch{items=[];root='the media folder'}render(!W);setTimeout(pvPoll,1500)}
 /* ---- Speed test: scripted fast sweeps under different configurations, so the real cost on THIS machine can be read off a table ---- */
 const BCSS={blur:'*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}',corners:'.g>img,.g>video,.g>span{border-radius:0!important}',
