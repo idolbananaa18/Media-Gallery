@@ -28,6 +28,8 @@ USE_THUMBS = Image is not None
 FFMPEG = shutil.which("ffmpeg")      # optional: with ffmpeg, every video gets a cached 640px poster frame so the wall needs no <video> per tile
 POSTER_GATE = threading.Semaphore(2)
 USE_FF = FFMPEG is not None          # video posters + previews need only ffmpeg (NOT Pillow)
+PV_QUALITY = {"480": (480, "26", "veryfast"), "720": (720, "21", "fast")}   # label -> (max height, x264 crf, preset); lower crf = sharper
+PV_DEFAULT = PV_TARGET = "720"       # PV_TARGET: the quality the browser last asked for; the background worker prepares that one for the whole library
 PV_Q, PV_SET, PV_FAIL, PV_CV, PV_THREAD = collections.deque(), set(), set(), threading.Condition(), None
 INDEX, CACHE, VID = {}, {}, {}
 CHUNK = 2_000_000  # max bytes per range response: frees sockets so many videos can stream at once
@@ -147,7 +149,7 @@ def thumb_path(p, st):
 def poster_path(p, st):
     """Cached poster JPEG for video p (made with ffmpeg), or None if unavailable."""
     if not USE_FF: return None
-    out = THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}|poster".encode()).hexdigest()[:24] + ".v.jpg")
+    out = THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}|poster720".encode()).hexdigest()[:24] + ".v.jpg")
     if out.is_file(): return out
     with POSTER_GATE:
         if out.is_file(): return out
@@ -156,7 +158,7 @@ def poster_path(p, st):
         for seek in (["-ss", "0.4"], []):   # a little in (skips black first frames); retry from 0 for very short clips
             try:
                 r = subprocess.run([FFMPEG, "-v", "error", "-y", *seek, "-i", str(p), "-frames:v", "1",
-                                    "-vf", "scale='min(640,iw)':-2", "-q:v", "5", str(tmp)],
+                                    "-vf", "scale=-2:'min(720,ih)'", "-q:v", "3", str(tmp)],
                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
             except Exception:
                 return None
@@ -167,20 +169,21 @@ def poster_path(p, st):
         return None
 
 
-def preview_file(p, st):
-    return THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}|preview".encode()).hexdigest()[:24] + ".w.mp4")
+def preview_file(p, st, q):
+    return THUMB_DIR / (hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}|preview{q}".encode()).hexdigest()[:24] + f".w{q}.mp4")
 
 
-def make_preview(p, st):
-    """Small 480p, audio-less, first-10s copy of video p for the wall (the lightbox still plays the original). None on failure."""
-    out = preview_file(p, st)
+def make_preview(p, st, q):
+    """Smaller (q = '480'/'720' px tall), audio-less, first-10s copy of video p for the wall (the lightbox still plays the original). None on failure."""
+    height, crf, preset = PV_QUALITY[q]
+    out = preview_file(p, st, q)
     if out.is_file(): return out
     THUMB_DIR.mkdir(exist_ok=True)
     tmp = out.with_name(out.stem + ".tmp.mp4")
     kw = {"creationflags": 0x00004000} if os.name == "nt" else {"preexec_fn": lambda: os.nice(10)}   # run below normal priority
     try:
-        r = subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(p), "-map", "0:v:0", "-t", "10", "-vf", "scale=-2:'min(480,ih)'",
-                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", str(tmp)],
+        r = subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(p), "-map", "0:v:0", "-t", "10", "-vf", f"scale=-2:'min({height},ih)'",
+                            "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", str(tmp)],
                            stdin=subprocess.DEVNULL, capture_output=True, timeout=600, **kw)
         ok = r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0
     except Exception:
@@ -196,27 +199,41 @@ def pv_worker():
     while True:
         with PV_CV:
             while not PV_Q: PV_CV.wait()
-            p = PV_Q.popleft()
+            p, q = PV_Q.popleft()
         try:
-            if not make_preview(p, p.stat()): PV_FAIL.add(p)
+            if not make_preview(p, p.stat(), q): PV_FAIL.add((p, q))
         except Exception:
-            PV_FAIL.add(p)
+            PV_FAIL.add((p, q))
         finally:
-            with PV_CV: PV_SET.discard(p)
+            with PV_CV: PV_SET.discard((p, q))
 
 
-def pv_enqueue(p, front=False):
+def pv_enqueue(p, q, front=False):
     """Queue a background preview job (one worker, low priority). front=True: someone is waiting on it right now."""
     global PV_THREAD
-    if not USE_FF or p in PV_FAIL: return
+    if not USE_FF or (p, q) in PV_FAIL: return
+    job = (p, q)
     with PV_CV:
-        if p in PV_SET:
-            if front and p in PV_Q: PV_Q.remove(p); PV_Q.appendleft(p)
+        if job in PV_SET:
+            if front and job in PV_Q: PV_Q.remove(job); PV_Q.appendleft(job)
             return
-        PV_SET.add(p); (PV_Q.appendleft if front else PV_Q.append)(p)
+        PV_SET.add(job); (PV_Q.appendleft if front else PV_Q.append)(job)
         if PV_THREAD is None or not PV_THREAD.is_alive():
             PV_THREAD = threading.Thread(target=pv_worker, daemon=True); PV_THREAD.start()
         PV_CV.notify()
+
+
+def pv_target(q):
+    """The browser asked for quality q: make it the background target and queue every video that lacks it."""
+    global PV_TARGET
+    if q == PV_TARGET: return
+    PV_TARGET = q
+    with LOCK: rels = list(VID.values())
+    for rel in rels:
+        p = safe(rel)
+        try:
+            if p and not preview_file(p, p.stat(), q).is_file(): pv_enqueue(p, q)
+        except OSError: pass
 
 
 def norm(t):
@@ -273,7 +290,7 @@ def scan():
             url = "/f/" + quote(rel)
             if k == "video":  # extension-less URL + neutral type so download managers don't treat it as a video
                 h = hashlib.sha1(rel.encode()).hexdigest()[:16]; vids[h] = rel; url = "/v/" + h
-            if k == "video" and USE_FF and not preview_file(p, st).is_file(): pv_enqueue(p)
+            if k == "video" and USE_FF and not preview_file(p, st, PV_TARGET).is_file(): pv_enqueue(p, PV_TARGET)
             th = "/t/" + quote(rel) if USE_THUMBS and k == "image" and ext in THUMB_EXT and wh and max(wh) > THUMB_MAX else None
             it = {"id": rel, "name": os.path.basename(rel), "kind": k, "url": url, "th": th, "po": ("/p/" + h) if k == "video" and USE_FF else None, "pv": ("/w/" + h) if k == "video" and USE_FF else None, "w": wh[0] if wh else 0,
                   "h": wh[1] if wh else 0, "mtime": int(st.st_mtime), "size": st.st_size,
@@ -340,10 +357,13 @@ class H(BaseHTTPRequestHandler):
             with LOCK: rel = VID.get(path[3:])
             p = safe(rel) if rel else None
             if not p: return self.file(None)
-            try: out = preview_file(p, p.stat())
+            q = parse_qs(urlparse(self.path).query).get("q", [PV_DEFAULT])[0]
+            if q not in PV_QUALITY: q = PV_DEFAULT
+            pv_target(q)
+            try: out = preview_file(p, p.stat(), q)
             except OSError: return self.file(None)
             if out.is_file(): return self.file(out, True)
-            pv_enqueue(p, front=True)
+            pv_enqueue(p, q, front=True)
             return self.send(302, b"", extra=[("Location", "/v/" + path[3:]), ("Cache-Control", "no-store")])
         if path.startswith("/p/"):
             with LOCK: rel = VID.get(path[3:])
@@ -464,6 +484,7 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <label title="Soft shadow under each tile. Turning it off makes big walls noticeably smoother">Shadows <input id="s_shadows" type="checkbox"></label>
 <label title="On hover, the tile slides toward the centre of your screen. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
 <label title="Which videos play (when limited by the playing cap): those nearest the centre of the screen (0%) or nearest your mouse (100%)">Video focus <input id="s_vf" type="range" min="0" max="100" step="10"></label>
+<label title="Sharpness of videos while they play on the wall. Original = the file itself (sharpest, heaviest); 720p / 480p = smaller cached copies made by ffmpeg (smoother). The lightbox always plays the original.">Wall video quality <select id="s_vq"><option value="orig">Original (sharpest)</option><option value="720">High (720p)</option><option value="480">Fast (480p)</option></select></label>
 <label>Video previews <select id="s_prev"><option value="all">Play in view</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
 <label>Playing at once <select id="s_cap"><option>3</option><option>6</option><option>10</option><option>16</option><option>30</option></select></label>
 <button id="s_bench" title="Sweeps the wall quickly under ~10 different configurations and shows which one costs you the most frame rate. Takes about 45 seconds; your settings are not changed.">Run speed test…</button></div>
@@ -472,19 +493,19 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
-let S={zoom:1,hover:1.02,pull:0,shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
+let S={zoom:1,hover:1.02,pull:0,vq:'720',shadows:true,vfocus:.5,labels:true,spread:1,sway:1,theme:'dark',accent:'#c9a7ff',blur:false,preview:'all',cap:6,kind:'all'};
 try{Object.assign(S,JSON.parse(localStorage.getItem('mg')||'{}'))}catch{}
 if(!['all','image','gif','video'].includes(S.kind))S.kind='all';
-if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
+if(!(S.zoom>=.25&&S.zoom<=2))S.zoom=1;if(!(S.hover>=1&&S.hover<=3))S.hover=1.02;if(!(S.vfocus>=0&&S.vfocus<=1))S.vfocus=.5;if(!(S.pull>=0&&S.pull<=1))S.pull=0;if(typeof S.labels!='boolean')S.labels=true;if(!['orig','720','480'].includes(S.vq))S.vq='720';if(typeof S.shadows!='boolean')S.shadows=true;if(!(S.spread>=.75&&S.spread<=4))S.spread=1;if(![3,6,10,16,30].includes(+S.cap))S.cap=6;if(![0,1,2.5].includes(+S.sway))S.sway=1;
 const save=()=>{try{localStorage.setItem('mg',JSON.stringify(S))}catch{}};
 let items=[],view=[],root='',cur=-1,dirty=false,tagF=new Set(),pos=[],W=0,H=0,cx=0,cy=0,tx=0,ty=0,fx=.5,fy=.5,lastMove=-1e9,snap=true,lc={x:1e9,y:1e9},rt,qt,rz;
 const live=new Map(),world=$('#world');
 function applyS(){const r=document.documentElement;r.dataset.theme=S.theme;r.style.setProperty('--ac',S.accent);r.style.setProperty('--sw',S.sway);r.style.setProperty('--hs',S.hover);
- document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
+ document.body.classList.toggle('blur',S.blur);document.body.classList.toggle('nolabels',!S.labels);document.body.classList.toggle('nosway',!(S.sway>0));document.body.classList.toggle('noshadow',!S.shadows);$('#s_shadows').checked=S.shadows;$('#s_labels').checked=S.labels;$('#s_pull').value=Math.round(S.pull*100);$('#s_vq').value=S.vq;$('#s_vf').value=Math.round(S.vfocus*100);$('#s_zoom').value=S.zoom*100;$('#s_spread').value=S.spread*100;$('#s_hover').value=Math.round(S.hover*100);$('#s_sway').value=String(S.sway);$('#s_theme').value=S.theme;$('#s_ac').value=S.accent;
  $('#s_blur').checked=S.blur;$('#s_prev').value=S.preview;$('#s_cap').value=S.cap;r.style.setProperty('--hh',$('header').offsetHeight+'px')}
 function set(k,v){S[k]=v;save();applyS()}
 const bind=(id,ev,fn)=>{$(id)['on'+ev]=e=>fn(e.target)};
-bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
+bind('#s_zoom','input',t=>{set('zoom',t.value/100);relayout(true)});bind('#s_spread','input',t=>{set('spread',t.value/100);relayout(true)});bind('#s_hover','input',t=>set('hover',t.value/100));bind('#s_labels','change',t=>set('labels',t.checked));bind('#s_shadows','change',t=>set('shadows',t.checked));bind('#s_pull','input',t=>{set('pull',t.value/100);if(hov)pullTo(hov)});bind('#s_vq','change',t=>{set('vq',t.value);live.forEach(m=>stopVid(m));sync()});bind('#s_vf','input',t=>{set('vfocus',t.value/100);sync()});bind('#s_sway','change',t=>set('sway',+t.value));bind('#s_theme','change',t=>set('theme',t.value));
 bind('#s_ac','input',t=>set('accent',t.value));bind('#s_blur','change',t=>set('blur',t.checked));bind('#s_prev','change',t=>{set('preview',t.value);sync()});bind('#s_cap','change',t=>{set('cap',+t.value);sync()});
 $('#gear').onclick=()=>$('#set').classList.toggle('open');$('#re').onclick=load;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(render,220)};
 function hide(on){document.body.classList.toggle('hide',on);if(on){$('#set').classList.remove('open');const h=$('#hint');h.classList.add('show');setTimeout(()=>h.classList.remove('show'),3200)}}
@@ -537,7 +558,7 @@ function cull(){const z=S.zoom,mg=500,x0=(cx-mg)/z,y0=(cy-mg)/z,x1=(cx+innerWidt
  lc={x:cx,y:cy};sync()}
 /* Video tiles show a cheap poster <img>; a real <video> exists only on the few tiles that are playing (<= cap) and is removed afterwards. */
 function startVid(m){const it=view[+m.dataset.i];if(!it||m._vbad)return;let v=m.querySelector('video');
- if(!v){v=document.createElement('video');v.muted=true;v.loop=true;v.playsInline=true;v.disablePictureInPicture=true;v.preload='auto';v.src=it.pv||it.url;
+ if(!v){v=document.createElement('video');v.muted=true;v.loop=true;v.playsInline=true;v.disablePictureInPicture=true;v.preload='auto';v.src=S.vq=='orig'||!it.pv?it.url:it.pv+'?q='+S.vq;
   const g=m.querySelector('.g');g.insertBefore(v,g.querySelector('span'))}
  if(v.paused)v.play().catch(()=>{})}
 function stopVid(m){const v=m.querySelector('video');if(v){v.pause();v.removeAttribute('src');v.load();v.remove()}}
@@ -549,7 +570,7 @@ function pump(){while(pbusy<2&&pq.length){const z=S.zoom,fx_=(cx+innerWidth/2)/z
 /* Fallback when the server has no ffmpeg poster: grab one frame in the browser, at most 2 at a time, nearest tiles first, cached for the session. */
 function capture(m){return new Promise(res=>{const it=view[+m.dataset.i],v=document.createElement('video');let done=false,tm;
  const end=u=>{if(done)return;done=true;clearTimeout(tm);v.removeAttribute('src');v.load();if(u){POS.set(it.id,u);if(m.isConnected)setPoster(m,u)}res()};
- const grab=()=>{try{const w=v.videoWidth,h=v.videoHeight;if(!w)return end();const k=Math.min(1,640/w),c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);
+ const grab=()=>{try{const w=v.videoWidth,h=v.videoHeight;if(!w)return end();const k=Math.min(1,720/h),c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);
   c.getContext('2d').drawImage(v,0,0,c.width,c.height);c.toBlob(b=>end(b?URL.createObjectURL(b):null),'image/jpeg',.8)}catch{end()}};
  v.muted=true;v.playsInline=true;v.preload='auto';tm=setTimeout(()=>end(),8000);v.onerror=()=>end();v.onseeked=grab;
  v.onloadeddata=()=>{if(v.duration>.8)v.currentTime=.4;else grab()};v.src=it.url})}
