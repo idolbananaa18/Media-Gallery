@@ -356,7 +356,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#141416}:focus-visib
 .f:hover{animation-play-state:paused}.nosway .f{animation:none}.noshadow .g>img,.noshadow .g>video{box-shadow:none}
 @keyframes sw{from{transform:translate3d(0,0,0) rotate(calc(var(--rt) * var(--sw) * -1))}to{transform:translate3d(calc(var(--dx) * var(--sw)),calc(var(--dy) * var(--sw)),0) rotate(calc(var(--rt) * var(--sw)))}}
 .g{pointer-events:none;position:relative;width:100%;height:100%;translate:var(--hx,0px) var(--hy,0px);transition:transform .4s ease,translate .6s cubic-bezier(.22,.8,.25,1)}.f:hover>.g{transform:scale(var(--hs,1.02))}.nolabels .g>span{display:none}
-.g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}.g>video{position:absolute;inset:0;box-shadow:none}
+.g>img,.g>video{display:block;width:100%;height:100%;border-radius:8px;background:var(--tile);opacity:0;box-shadow:0 14px 44px #0007;transition:opacity .9s ease}.g>video{position:absolute;inset:0;box-shadow:none;transition:opacity .15s linear}
 .g>.ld{opacity:1}
 .g>span{position:absolute;inset:auto 0 0;padding:28px 12px 9px;font-size:12px;color:#fff;background:linear-gradient(transparent,#000b);border-radius:0 0 8px 8px;opacity:0;transition:opacity .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .f:hover .g>span{opacity:1}
@@ -456,7 +456,7 @@ function mk(i){const it=view[i],p=pos[i],h=h32(it.id),m=document.createElement('
  m.innerHTML=`<div class="f" style="width:${p.w}px;height:${p.h}px;--dx:${h%17-8}px;--dy:${(h>>>5)%17-8}px;--rt:${((h>>>9)%9-4)/10}deg;--du:${9+(h>>>13)%9}s;--de:-${(h>>>3)%10}s"><div class="g">`
  +(it.kind=='video'?`<img class="po"${it.po?` src="${it.po}"`:''} decoding="async" alt="">`:`<img src="${it.th||it.url}" decoding="async" alt="">`)+`<span>${esc(it.name)}</span></div></div>`;
  world.appendChild(m);if(it.kind=='video')wantPoster(m);return m}
-let hov=null;const ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0,spd=0,calm=0,pcx=0,pcy=0,needSettle=false;const FAST=350;/* camera px/s above which no NEW video is started */
+let hov=null;const ptr={x:0,y:0,has:false};let vdirty=false,lastSync=0,lastStart=0,pspd=0,calm=0,ppx=0,ppy=0,needSettle=false;const FAST=600,PACE=180;/* while the POINTER moves faster than FAST px/s, at most one NEW video starts per PACE ms */
 /* Hover pull: the target is captured ONCE when the pointer enters a tile (where the screen centre is at that moment) and then stays fixed,
    so the tile glides there and stays put, even if the wall pans afterwards. The unmoved .f remains the hover hitbox; only .g moves. */
 function pullTo(m){const f=m.firstChild,p=pos[+m.dataset.i];if(!f||!p)return;const z=S.zoom,k=cur<0?S.pull:0;
@@ -488,10 +488,11 @@ function capture(m){return new Promise(res=>{const it=view[+m.dataset.i],v=docum
   c.getContext('2d').drawImage(v,0,0,c.width,c.height);c.toBlob(b=>end(b?URL.createObjectURL(b):null),'image/jpeg',.8)}catch{end()}};
  v.muted=true;v.playsInline=true;v.preload='auto';tm=setTimeout(()=>end(),8000);v.onerror=()=>end();v.onseeked=grab;
  v.onloadeddata=()=>{if(v.duration>.8)v.currentTime=.4;else grab()};v.src=it.url})}
-function sync(){vdirty=false;lastSync=performance.now();const z=S.zoom,on=S.preview=='all'&&cur<0&&!document.hidden,x0=cx/z,y0=cy/z,x1=(cx+innerWidth)/z,y1=(cy+innerHeight)/z,fw=ptr.has?S.vfocus:0,mx=(cx+innerWidth/2*(1-fw)+ptr.x*fw)/z,my=(cy+innerHeight/2*(1-fw)+ptr.y*fw)/z,vs=[],sel=new Set();
+function sync(){vdirty=false;lastSync=performance.now();const z=S.zoom,on=S.preview=='all'&&cur<0&&!document.hidden,kx=snap?cx:tx,ky=snap?cy:ty,x0=kx/z,y0=ky/z,x1=(kx+innerWidth)/z,y1=(ky+innerHeight)/z,fw=ptr.has?S.vfocus:0,mx=(kx+innerWidth/2*(1-fw)+ptr.x*fw)/z,my=(ky+innerHeight/2*(1-fw)+ptr.y*fw)/z,vs=[],sel=new Set();
  if(on){live.forEach((m,i)=>{if(view[i].kind!='video')return;const p=pos[i];if(p.x<x1&&p.x+p.w>x0&&p.y<y1&&p.y+p.h>y0)vs.push({m,d:Math.hypot(p.x+p.w/2-mx,p.y+p.h/2-my)})});
   vs.sort((a,b)=>a.d-b.d);/* hysteresis: a tile that is already playing keeps its slot while it is within 2 places of the cap, so selection doesn't flip-flop */
-  if(spd>FAST){needSettle=true;vs.forEach((o,k)=>{if(k<S.cap+2&&o.m.querySelector('video'))sel.add(o.m)})}   /* moving fast: keep what plays, start nothing new (creating decoders is what stutters) */
+  if(pspd>FAST){needSettle=true;const now=performance.now();let fresh=0;   /* moving fast: keep what plays; add new videos one at a time (nearest first) - bursts of decoder creation are what stutter */
+   vs.forEach((o,k)=>{if(k<S.cap+2&&o.m.querySelector('video'))sel.add(o.m);else if(k<S.cap&&!fresh&&now-lastStart>=PACE){fresh=1;lastStart=now;sel.add(o.m)}})}
   else vs.forEach((o,k)=>{if(k<S.cap||k<S.cap+2&&o.m.querySelector('video'))sel.add(o.m)})}
  live.forEach((m,i)=>{if(view[i].kind!='video')return;if(sel.has(m)||S.preview=='hover'&&cur<0&&m._hv)startVid(m);else stopVid(m)})}
 let last=0;function frame(t){requestAnimationFrame(frame);const dt=Math.min(100,t-last||16);last=t;if(!W)return;
@@ -499,8 +500,8 @@ let last=0;function frame(t){requestAnimationFrame(frame);const dt=Math.min(100,
  if(t-lastMove>7000){a=.5+.4*Math.sin(t/23000);b=.5+.4*Math.cos(t/31000)}
  tx=Ws>vw?a*(Ws-vw):(Ws-vw)/2;ty=Hs>vh?b*(Hs-vh):(Hs-vh)/2;
  if(snap){cx=tx;cy=ty;snap=false}else{const k=1-Math.exp(-dt/280);cx+=(tx-cx)*k;cy+=(ty-cy)*k}
- spd+=(Math.hypot(cx-pcx,cy-pcy)/dt*1000-spd)*.25;pcx=cx;pcy=cy;calm=spd<FAST*.5?calm+dt:0;if(needSettle&&calm>200){needSettle=false;sync()}
- world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;if(vdirty&&S.vfocus>0&&t-lastSync>250)sync();if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
+ pspd+=(Math.hypot(ptr.x-ppx,ptr.y-ppy)/dt*1000-pspd)*.4;ppx=ptr.x;ppy=ptr.y;calm=pspd<FAST?calm+dt:0;if(needSettle&&calm>50){needSettle=false;sync()}
+ world.style.transform=`translate3d(${-cx}px,${-cy}px,0) scale(${z})`;if(vdirty&&S.vfocus>0&&t-lastSync>120)sync();if(Math.abs(cx-lc.x)+Math.abs(cy-lc.y)>90)cull()}
 addEventListener('pointermove',e=>{if(e.target.closest&&e.target.closest('header,#set,#lb'))return;
  fx=Math.min(1,Math.max(0,(e.clientX/innerWidth-.08)/.84));fy=Math.min(1,Math.max(0,(e.clientY/innerHeight-.08)/.84));ptr.x=e.clientX;ptr.y=e.clientY;ptr.has=true;vdirty=true;lastMove=performance.now()});
 addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>relayout(true),300)});document.addEventListener('visibilitychange',sync);
