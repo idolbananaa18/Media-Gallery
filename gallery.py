@@ -371,7 +371,8 @@ body.hide header,body.hide #set,body.hide .g>span,body.hide #bar{opacity:0!impor
 <label title="On hover, the tile slides toward the centre of your screen. 0 = off, 100 = all the way to the centre. Its original spot stays the hover area.">Hover pull <input id="s_pull" type="range" min="0" max="100" step="5"></label>
 <label title="Which videos play (when limited by the playing cap): those nearest the centre of the screen (0%) or nearest your mouse (100%)">Video focus <input id="s_vf" type="range" min="0" max="100" step="10"></label>
 <label>Video previews <select id="s_prev"><option value="all">Play in view</option><option value="hover">On hover</option><option value="off">Off</option></select></label>
-<label>Playing at once <select id="s_cap"><option>3</option><option>6</option><option>10</option><option>16</option><option>30</option></select></label></div>
+<label>Playing at once <select id="s_cap"><option>3</option><option>6</option><option>10</option><option>16</option><option>30</option></select></label>
+<button id="s_bench" title="Sweeps the wall quickly under ~10 different configurations and shows which one costs you the most frame rate. Takes about 45 seconds; your settings are not changed.">Run speed test…</button></div>
 <div id="empty" hidden></div><div id="hint">Press H to bring the controls back</div><button id="dot" aria-label="Show controls"></button>
 <div id="lb"><div id="stage"></div><div id="bar"><span class="nm" id="nm"></span><span class="row" id="chips"></span>
 <input id="add" placeholder="Add tag, Enter" aria-label="Add tag" size="14"><button id="prev">Prev</button><button id="next">Next</button><button id="x">Close</button></div></div>
@@ -488,6 +489,43 @@ function probe(it){return new Promise(ok=>{const v=it.kind=='video',e=document.c
 async function measure(list){const q=list.filter(i=>!(i.w>0&&i.h>0));let n=0;
  await Promise.race([Promise.all(Array.from({length:Math.min(8,q.length)},async()=>{while(n<q.length)await probe(q[n++])})),new Promise(r=>setTimeout(r,6000))])}
 async function load(){try{const r=await fetch('/api/items');const d=await r.json();items=d.items;root=d.root;await measure(items)}catch{items=[];root='the media folder'}render(!W)}
+/* ---- Speed test: scripted fast sweeps under different configurations, so the real cost on THIS machine can be read off a table ---- */
+const BCSS={blur:'*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}',corners:'.g>img,.g>video,.g>span{border-radius:0!important}',
+ anim:'.f,.g,.g>img,.g>video{animation:none!important;transition:none!important}',media:'.g>img,.g>video{visibility:hidden!important}',quarter:'.m:not(:nth-child(4n+1)){display:none!important}',
+ bluru:'.blur .g>img,.blur .g>video{filter:none!important}'};
+function gpuName(){try{const c=document.createElement('canvas'),g=c.getContext('webgl')||c.getContext('experimental-webgl');if(!g)return 'WebGL unavailable (hardware acceleration may be off)';
+ const e=g.getExtension('WEBGL_debug_renderer_info');return e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER)}catch{return 'unknown'}}
+function sweepFrames(ms){return new Promise(res=>{const f=[];let l=0,t0=0;(function t(n){if(!t0){t0=n;l=n}else{f.push(n-l);l=n}
+ const sec=(n-t0)/1000;fx=.5+.45*Math.sin(sec*2.1);fy=.5+.45*Math.sin(sec*1.5+1);lastMove=performance.now();
+ if(n-t0<ms)requestAnimationFrame(t);else res(f)})(performance.now());requestAnimationFrame(()=>{})})}
+function idleFrames(ms){return new Promise(res=>{const f=[];let l=0,t0=0;(function t(n){if(!t0){t0=n;l=n}else{f.push(n-l);l=n}if(n-t0<ms)requestAnimationFrame(t);else res(f)})(performance.now())})}
+const stat=f=>{f=f.slice(3);const a=f.slice().sort((x,y)=>x-y),m=f.reduce((x,y)=>x+y,0)/f.length;return{fps:1000/m,p95:a[Math.floor(a.length*.95)],worst:a[a.length-1],slow:f.filter(x=>x>25).length/f.length*100}};
+let benching=false;
+async function bench(){if(benching)return;benching=true;$('#set').classList.remove('open');
+ let box=$('#bench');if(!box){box=document.createElement('div');box.id='bench';box.style.cssText='position:fixed;z-index:20;left:50%;top:50%;transform:translate(-50%,-50%);width:min(680px,92vw);max-height:86vh;overflow:auto;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 20px 60px #000a;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace';document.body.appendChild(box)}
+ box.style.display='block';const save={px:fx,py:fy,prev:S.preview,lm:lastMove},cls=['nosway','noshadow'].map(c=>[c,document.body.classList.contains(c)]);
+ const st=document.createElement('style');document.head.appendChild(st);
+ const cfg=[['Current settings',{}],['Header blur off',{css:'blur'}],['Sway off',{cls:'nosway'}],['Shadows off',{cls:'noshadow'}],['Rounded corners off',{css:'corners'}],['Video previews off',{prev:'off'}],
+  ['Animations + transitions off',{css:'anim'}],['Media hidden (empty boxes only)',{css:'media'}],['Only a quarter of the tiles',{css:'quarter'}],
+  ['EVERYTHING above off',{css:'blur corners anim',cls:'nosway noshadow',prev:'off'}]];
+ if(S.blur)cfg.splice(1,0,['Blur-until-hover off',{css:'bluru'}]);
+ const rows=[];const info=()=>`Speed test - ${new Date().toISOString().slice(0,16).replace('T',' ')}\nScreen ${screen.width}x${screen.height} @${devicePixelRatio}x, window ${innerWidth}x${innerHeight}, zoom ${Math.round(S.zoom*100)}%, spread ${Math.round(S.spread*100)}%\nGPU: ${gpuName()}\nTiles built: ${live.size} of ${view.length} (videos in page: ${document.querySelectorAll('video').length}, playing: ${[...document.querySelectorAll('video')].filter(v=>!v.paused).length})\nBrowser: ${navigator.userAgent.replace(/^Mozilla\/5.0 /,'').slice(0,110)}\n`;
+ const render=(msg)=>{box.innerHTML='<b>Speed test</b> - keep this tab in front and don\'t touch the mouse.<pre style="white-space:pre-wrap;margin:10px 0">'+esc(info()+'\n'+rows.join('\n')+(msg?'\n\n'+msg:''))+'</pre>'};
+ render('starting...');await new Promise(r=>setTimeout(r,400));
+ const idle=stat(await idleFrames(1500));rows.push(`Idle (no movement): ${idle.fps.toFixed(0)} fps   <- your screen's refresh rate / baseline`);
+ rows.push('Fast sweep:                          fps   p95   worst  frames>25ms');
+ for(let k=0;k<cfg.length;k++){const [name,o]=cfg[k];render(`running ${k+1}/${cfg.length}: ${name} ...`);
+  st.textContent=(o.css||'').split(' ').filter(Boolean).map(c=>BCSS[c]).join('\n');
+  cls.forEach(([c,was])=>document.body.classList.toggle(c,was||(o.cls||'').split(' ').includes(c)));
+  S.preview=o.prev||save.prev;sync();await new Promise(r=>setTimeout(r,500));
+  const r=stat(await sweepFrames(3500));rows.push(`${name.padEnd(34)} ${r.fps.toFixed(0).padStart(3)}  ${r.p95.toFixed(0).padStart(4)}ms ${r.worst.toFixed(0).padStart(5)}ms   ${r.slow.toFixed(0).padStart(3)}%`)}
+ st.remove();cls.forEach(([c,was])=>document.body.classList.toggle(c,was));S.preview=save.prev;fx=save.px;fy=save.py;lastMove=save.lm;sync();
+ const text=()=>box.querySelector('pre').textContent;render('Done. Higher fps is better; a row that jumps well above "Current settings" is where your lag comes from.');
+ const bar=document.createElement('div');bar.style.cssText='display:flex;gap:8px;margin-top:6px';
+ bar.innerHTML='<button id="bc">Copy results</button><button id="bx">Close</button>';box.appendChild(bar);
+ $('#bc').onclick=async()=>{try{await navigator.clipboard.writeText(text());$('#bc').textContent='Copied'}catch{const r=document.createRange();r.selectNodeContents(box.querySelector('pre'));getSelection().removeAllRanges();getSelection().addRange(r);$('#bc').textContent='Selected - press Ctrl+C'}};
+ $('#bx').onclick=()=>{box.style.display='none'};benching=false}
+bind('#s_bench','click',bench);
 applyS();requestAnimationFrame(frame);load();
 </script></body></html>"""
 
